@@ -166,3 +166,16 @@ body {
   .reveal-grid + .mt-8 > div > div > button:first-child { grid-column:1; justify-self:start; margin-left:0; }
   .reveal-grid + .mt-8 > div > div > button:last-child { grid-column:3; justify-self:end; }
 }
+
+.export-btn { color:#5740c9; background:#eee9ff; }
+.restart-btn { color:#5b6577; background:#f1f3f8; }
+@media(max-width:639px){
+  .game-shell { padding-left:14px; padding-right:14px; }
+  .round-topbar { padding:14px 16px; }
+  .word-card { padding:20px 12px; border-radius:18px; }
+  .word-card strong { font-size:clamp(1.6rem,9vw,2.25rem); line-height:1.15; }
+  .meet-mark { line-height:1; }
+  .reveal-grid { gap:4px; }
+  .export-btn,.restart-btn { width:100%; min-height:50px; margin:0; }
+  .history-chip { max-width:100%; flex-wrap:wrap; }
+}

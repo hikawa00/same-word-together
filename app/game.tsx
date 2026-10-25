@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowRight, Check, Clock3, Copy, Link2, LoaderCircle, Sparkles, UsersRound } from "lucide-react";
+import { ArrowRight, Check, Clock3, Copy, Download, Link2, LoaderCircle, Sparkles, UsersRound } from "lucide-react";
 
 type RoomState = {
   code: string; slot: number; phase: "waiting" | "thinking" | "revealed" | "matched";
@@ -20,6 +20,74 @@ async function api(payload: Record<string, unknown>) {
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "出错了，请重试");
   return data;
+}
+
+function exportRecord(room: RoomState) {
+  const canvas = document.createElement("canvas");
+  const rounds = [...room.history, { number: room.roundNumber, words: room.words ?? [] }];
+  const width = 1080;
+  const rowHeight = 176;
+  const height = 515 + rounds.length * rowHeight;
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) return;
+
+  const background = context.createLinearGradient(0, 0, width, height);
+  background.addColorStop(0, "#f0eaff");
+  background.addColorStop(0.52, "#f9f8ff");
+  background.addColorStop(1, "#e5f9fc");
+  context.fillStyle = background;
+  context.fillRect(0, 0, width, height);
+
+  const roundedRect = (x: number, y: number, w: number, h: number, radius: number, fill: string) => {
+    context.beginPath();
+    context.roundRect(x, y, w, h, radius);
+    context.fillStyle = fill;
+    context.fill();
+  };
+
+  roundedRect(58, 54, width - 116, height - 108, 40, "#ffffffd9");
+  context.textAlign = "center";
+  context.fillStyle = "#6d4aff";
+  context.font = "700 24px Arial, 'Microsoft YaHei', sans-serif";
+  context.fillText("SAME WORD · 同词相遇", width / 2, 132);
+  context.fillStyle = "#171727";
+  context.font = "900 56px Arial, 'Microsoft YaHei', sans-serif";
+  context.fillText("你们的脑回路相遇了", width / 2, 220);
+  context.fillStyle = "#77728a";
+  context.font = "500 24px Arial, 'Microsoft YaHei', sans-serif";
+  context.fillText(`房间 ${room.code}  ·  共 ${room.roundNumber} 轮  ·  ${new Date().toLocaleDateString("zh-CN")}`, width / 2, 274);
+
+  rounds.forEach((round, index) => {
+    const y = 330 + index * rowHeight;
+    context.textAlign = "left";
+    context.fillStyle = "#77728a";
+    context.font = "700 21px Arial, 'Microsoft YaHei', sans-serif";
+    context.fillText(`第 ${round.number} 轮`, 112, y + 26);
+    roundedRect(112, y + 48, 376, 96, 22, "#eee9ff");
+    roundedRect(592, y + 48, 376, 96, 22, "#e2f8fb");
+    context.textAlign = "center";
+    context.fillStyle = "#5b3dda";
+    context.font = "800 34px Arial, 'Microsoft YaHei', sans-serif";
+    context.fillText(round.words[0] || "（未提交）", 300, y + 108, 336);
+    context.fillStyle = "#a29aaf";
+    context.font = "800 30px Arial, sans-serif";
+    context.fillText("×", width / 2, y + 108);
+    context.fillStyle = "#14778c";
+    context.font = "800 34px Arial, 'Microsoft YaHei', sans-serif";
+    context.fillText(round.words[1] || "（未提交）", 780, y + 108, 336);
+  });
+
+  context.textAlign = "center";
+  context.fillStyle = "#817b92";
+  context.font = "500 20px Arial, 'Microsoft YaHei', sans-serif";
+  context.fillText("表达可以不同，只要想到的是同一个东西。", width / 2, height - 128);
+
+  const link = document.createElement("a");
+  link.download = `同词相遇-${room.code}.png`;
+  link.href = canvas.toDataURL("image/png");
+  link.click();
 }
 
 export default function Game() {
@@ -157,5 +225,39 @@ function Thinking({ room, secondsLeft, word, setWord, busy, submit }: { room: Ro
 
 function Reveal({ room, busy, ready, match, restart }: { room: RoomState; busy: boolean; ready: () => void; match: () => void; restart: () => void }) {
   const manual = room.matchReason === "manual";
-  return <div className={room.phase === "matched" ? "game-card win-card overflow-hidden" : "game-card overflow-hidden"}><div className="round-topbar"><span>第 {room.roundNumber} 轮 · 揭晓</span><span>{room.phase === "matched" ? "🎉 同步成功" : "还差一点"}</span></div><div className="p-6 text-center sm:p-11"><p className="text-sm font-semibold text-violet-600">{room.phase === "matched" ? (manual ? "你们一致认为，这是同一个意思" : "你们的脑回路终于相遇了") : "从这两个词之间，寻找下一步"}</p><div className="reveal-grid mt-7"><div className="word-card word-a"><span>玩家 1</span><strong>{room.words?.[0]}</strong></div><div className="meet-mark">×</div><div className="word-card word-b"><span>玩家 2</span><strong>{room.words?.[1]}</strong></div></div>{room.phase === "matched" ? <div className="mt-8"><h1 className="text-3xl font-black sm:text-4xl">{manual ? "双方确认，同词成功！" : `第 ${room.roundNumber} 轮，同词成功！`}</h1><p className="mt-3 text-slate-500">表达可以不同，只要你们想到的是同一个东西。</p><button className="secondary-btn mt-6" onClick={restart}>再开一局</button></div> : <div className="mt-8"><div className="mx-auto w-full max-w-[94%]"><p className="mb-4 text-left text-sm text-slate-500">觉得两个词说的是同一个东西？双方确认也算成功。</p><div className="flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-center"><button className="secondary-btn sm:mx-0" onClick={match} disabled={busy || room.myMatchVote}>{room.myMatchVote ? <Check size={19}/> : <Sparkles size={19}/>} {room.myMatchVote ? "已确认，等待对方" : room.otherMatchVote ? "对方认为相同，我也同意" : "我认为意思相同"}</button><button className="primary-btn" onClick={ready} disabled={busy || room.myReady}>{room.myReady ? <Check size={19}/> : <ArrowRight size={19}/>} {room.myReady ? (room.otherReady ? "正在进入下一轮" : "等对方准备好") : "继续下一轮"}</button></div></div></div>}</div></div>;
+  const matched = room.phase === "matched";
+
+  return (
+    <div className={matched ? "game-card win-card overflow-hidden" : "game-card overflow-hidden"}>
+      <div className="round-topbar"><span>第 {room.roundNumber} 轮 · 揭晓</span><span>{matched ? "🎉 同步成功" : "还差一点"}</span></div>
+      <div className="p-5 text-center sm:p-11">
+        <p className="text-sm font-semibold text-violet-600">{matched ? (manual ? "你们一致认为，这是同一个意思" : "你们的脑回路终于相遇了") : "从这两个词之间，寻找下一步"}</p>
+        <div className="reveal-grid mt-6 sm:mt-7">
+          <div className="word-card word-a"><span>玩家 1</span><strong>{room.words?.[0]}</strong></div>
+          <div className="meet-mark">×</div>
+          <div className="word-card word-b"><span>玩家 2</span><strong>{room.words?.[1]}</strong></div>
+        </div>
+        {matched ? (
+          <div className="mt-7 sm:mt-8">
+            <h1 className="text-2xl font-black sm:text-4xl">{manual ? "双方确认，同词成功！" : `第 ${room.roundNumber} 轮，同词成功！`}</h1>
+            <p className="mt-3 text-sm text-slate-500 sm:text-base">表达可以不同，只要你们想到的是同一个东西。</p>
+            <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
+              <button className="secondary-btn export-btn" onClick={() => exportRecord(room)}><Download size={19}/> 导出本局记录图片</button>
+              <button className="secondary-btn restart-btn" onClick={restart}>再开一局</button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-7 sm:mt-8">
+            <div className="mx-auto w-full max-w-[94%]">
+              <p className="mb-4 text-left text-sm leading-6 text-slate-500">觉得两个词说的是同一个东西？双方确认也算成功。</p>
+              <div className="flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-center">
+                <button className="secondary-btn sm:mx-0" onClick={match} disabled={busy || room.myMatchVote}>{room.myMatchVote ? <Check size={19}/> : <Sparkles size={19}/>} {room.myMatchVote ? "已确认，等待对方" : room.otherMatchVote ? "对方认为相同，我也同意" : "我认为意思相同"}</button>
+                <button className="primary-btn" onClick={ready} disabled={busy || room.myReady}>{room.myReady ? <Check size={19}/> : <ArrowRight size={19}/>} {room.myReady ? (room.otherReady ? "正在进入下一轮" : "等对方准备好") : "继续下一轮"}</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
