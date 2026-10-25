@@ -5,6 +5,7 @@ export const rooms = sqliteTable("rooms", {
   playerOneToken: text("player_one_token").notNull(),
   playerTwoToken: text("player_two_token"),
   currentRound: integer("current_round").notNull().default(1),
+  durationSeconds: integer("duration_seconds").notNull().default(60),
   status: text("status").notNull().default("waiting"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),

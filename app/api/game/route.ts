@@ -2,8 +2,6 @@ import { and, asc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { rooms, rounds } from "../../../db/schema";
 
-const ROUND_MS = 60_000;
-
 function cleanCode(value: unknown) {
   return String(value ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
 }
@@ -42,7 +40,9 @@ async function stateFor(code: string, token: string) {
   const allRounds = await db.select().from(rounds).where(eq(rounds.roomCode, code)).orderBy(asc(rounds.number));
   const current = allRounds.find((round) => round.number === room.currentRound) ?? null;
   const now = Date.now();
-  const deadline = current ? new Date(current.startedAt).getTime() + ROUND_MS : null;
+  const deadline = current && room.durationSeconds > 0
+    ? new Date(current.startedAt).getTime() + room.durationSeconds * 1000
+    : null;
   const bothSubmitted = Boolean(current?.playerOneWord && current?.playerTwoWord);
   const revealed = Boolean(current && (bothSubmitted || (deadline !== null && now >= deadline)));
   const exactMatch = Boolean(
@@ -58,6 +58,7 @@ async function stateFor(code: string, token: string) {
       slot,
       phase: !room.playerTwoToken ? "waiting" : matched ? "matched" : revealed ? "revealed" : "thinking",
       roundNumber: room.currentRound,
+      durationSeconds: room.durationSeconds,
       deadline,
       serverNow: now,
       myWord: current ? (slot === 1 ? current.playerOneWord : current.playerTwoWord) : null,
@@ -99,12 +100,14 @@ export async function POST(request: Request) {
     const db = getDb();
 
     if (action === "create") {
+      const requestedDuration = Number(body.durationSeconds ?? 60);
+      if (![0, 30, 60].includes(requestedDuration)) return fail("请选择 30 秒、60 秒或不限时。", 400);
       const token = crypto.randomUUID();
       const now = new Date().toISOString();
       for (let attempt = 0; attempt < 8; attempt += 1) {
         const code = randomCode();
         try {
-          await db.insert(rooms).values({ code, playerOneToken: token, createdAt: now, updatedAt: now });
+          await db.insert(rooms).values({ code, playerOneToken: token, durationSeconds: requestedDuration, createdAt: now, updatedAt: now });
           return Response.json({ code, token }, { status: 201 });
         } catch (error) {
           if (attempt === 7) throw error;
@@ -140,8 +143,8 @@ export async function POST(request: Request) {
     if (action === "submit") {
       const word = cleanWord(body.word);
       if (!word) return fail("先写下一个词语吧。", 400);
-      const deadline = new Date(current.startedAt).getTime() + ROUND_MS;
-      if (Date.now() >= deadline || (slot === 1 ? current.playerOneWord : current.playerTwoWord)) {
+      const deadline = room.durationSeconds > 0 ? new Date(current.startedAt).getTime() + room.durationSeconds * 1000 : null;
+      if ((deadline !== null && Date.now() >= deadline) || (slot === 1 ? current.playerOneWord : current.playerTwoWord)) {
         return fail("这一轮已经不能修改了。", 409);
       }
       const now = new Date().toISOString();
@@ -149,15 +152,15 @@ export async function POST(request: Request) {
         .set(slot === 1 ? { playerOneWord: word, playerOneSubmittedAt: now } : { playerTwoWord: word, playerTwoSubmittedAt: now })
         .where(and(eq(rounds.roomCode, code), eq(rounds.number, room.currentRound)));
     } else if (action === "match") {
-      const deadline = new Date(current.startedAt).getTime() + ROUND_MS;
-      const revealed = Boolean((current.playerOneWord && current.playerTwoWord) || Date.now() >= deadline);
+      const deadline = room.durationSeconds > 0 ? new Date(current.startedAt).getTime() + room.durationSeconds * 1000 : null;
+      const revealed = Boolean((current.playerOneWord && current.playerTwoWord) || (deadline !== null && Date.now() >= deadline));
       if (!revealed) return fail("还没到揭晓时间。", 409);
       await db.update(rounds)
         .set(slot === 1 ? { playerOneMatch: true } : { playerTwoMatch: true })
         .where(and(eq(rounds.roomCode, code), eq(rounds.number, room.currentRound)));
     } else if (action === "ready") {
-      const deadline = new Date(current.startedAt).getTime() + ROUND_MS;
-      const revealed = Boolean((current.playerOneWord && current.playerTwoWord) || Date.now() >= deadline);
+      const deadline = room.durationSeconds > 0 ? new Date(current.startedAt).getTime() + room.durationSeconds * 1000 : null;
+      const revealed = Boolean((current.playerOneWord && current.playerTwoWord) || (deadline !== null && Date.now() >= deadline));
       if (!revealed) return fail("还没到揭晓时间。", 409);
       const matched = Boolean(
         (current.playerOneWord && current.playerTwoWord && normalizeWord(current.playerOneWord) === normalizeWord(current.playerTwoWord)) ||

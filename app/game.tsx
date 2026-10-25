@@ -5,7 +5,7 @@ import { ArrowRight, Check, Clock3, Copy, Download, Link2, LoaderCircle, Sparkle
 
 type RoomState = {
   code: string; slot: number; phase: "waiting" | "thinking" | "revealed" | "matched";
-  roundNumber: number; deadline: number | null; serverNow: number; myWord: string | null;
+  roundNumber: number; durationSeconds: number; deadline: number | null; serverNow: number; myWord: string | null;
   mySubmitted: boolean; otherSubmitted: boolean; myReady: boolean; otherReady: boolean;
   myMatchVote: boolean; otherMatchVote: boolean; matchReason: "exact" | "manual" | null;
   words: string[] | null; history: { number: number; words: string[] }[];
@@ -22,16 +22,17 @@ async function api(payload: Record<string, unknown>) {
   return data;
 }
 
-function exportRecord(room: RoomState) {
+function createRecordImage(room: RoomState) {
   const canvas = document.createElement("canvas");
   const rounds = [...room.history, { number: room.roundNumber, words: room.words ?? [] }];
   const width = 1080;
   const rowHeight = 176;
-  const height = 515 + rounds.length * rowHeight;
+  const visibleRowsBeforeExtension = 4;
+  const height = 515 + Math.max(rounds.length, visibleRowsBeforeExtension) * rowHeight;
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext("2d");
-  if (!context) return;
+  if (!context) return null;
 
   const background = context.createLinearGradient(0, 0, width, height);
   background.addColorStop(0, "#f0eaff");
@@ -84,9 +85,13 @@ function exportRecord(room: RoomState) {
   context.font = "500 20px Arial, 'Microsoft YaHei', sans-serif";
   context.fillText("表达可以不同，只要想到的是同一个东西。", width / 2, height - 128);
 
+  return canvas.toDataURL("image/png");
+}
+
+function saveRecordImage(image: string, code: string) {
   const link = document.createElement("a");
-  link.download = `同词相遇-${room.code}.png`;
-  link.href = canvas.toDataURL("image/png");
+  link.download = `同词相遇-${code}.png`;
+  link.href = image;
   link.click();
 }
 
@@ -100,6 +105,9 @@ export default function Game() {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [tick, setTick] = useState(Date.now());
+  const [durationSeconds, setDurationSeconds] = useState(60);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<"online" | "reconnecting" | "offline">("online");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -115,8 +123,10 @@ export default function Game() {
       const response = await fetch(`/api/game?code=${encodeURIComponent(code)}&token=${encodeURIComponent(token)}`, { cache: "no-store" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "同步失败");
-      setRoom(data.room); setError("");
-    } catch (err) { setError(err instanceof Error ? err.message : "同步失败"); }
+      setRoom(data.room); setError(""); setConnectionStatus("online");
+    } catch {
+      setConnectionStatus(navigator.onLine ? "reconnecting" : "offline");
+    }
   }, [code, token]);
 
   useEffect(() => {
@@ -127,13 +137,28 @@ export default function Game() {
   }, [code, token, refresh]);
 
   useEffect(() => {
+    const onOnline = () => { setConnectionStatus("reconnecting"); void refresh(); };
+    const onOffline = () => setConnectionStatus("offline");
+    const onVisibility = () => { if (document.visibilityState === "visible") void refresh(); };
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    document.addEventListener("visibilitychange", onVisibility);
+    if (!navigator.onLine) setConnectionStatus("offline");
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [refresh]);
+
+  useEffect(() => {
     const id = window.setInterval(() => setTick(Date.now()), 250);
     return () => window.clearInterval(id);
   }, []);
 
   useEffect(() => { if (room && !room.mySubmitted) setWord(""); }, [room?.roundNumber]);
 
-  const secondsLeft = useMemo(() => room?.deadline ? Math.max(0, Math.ceil((room.deadline - tick) / 1000)) : 60, [room?.deadline, tick]);
+  const secondsLeft = useMemo(() => room?.deadline ? Math.max(0, Math.ceil((room.deadline - tick) / 1000)) : room?.durationSeconds ?? 60, [room?.deadline, room?.durationSeconds, tick]);
 
   function enterRoom(nextCode: string, nextToken: string) {
     localStorage.setItem(`${TOKEN_KEY}:${nextCode}`, nextToken);
@@ -143,7 +168,7 @@ export default function Game() {
 
   async function createRoom() {
     setBusy(true); setError("");
-    try { const data = await api({ action: "create" }); enterRoom(data.code, data.token); }
+    try { const data = await api({ action: "create", durationSeconds }); enterRoom(data.code, data.token); }
     catch (err) { setError(err instanceof Error ? err.message : "创建失败"); }
     finally { setBusy(false); }
   }
@@ -189,11 +214,15 @@ export default function Game() {
               <div className="eyebrow"><Sparkles size={15} /> 两个人，一条脑回路</div>
               <h1 className="mt-5 max-w-2xl text-5xl font-black leading-[.98] tracking-[-.055em] text-slate-950 sm:text-7xl">你们会在第几轮<br/><span className="gradient-text">想到同一个词？</span></h1>
               <p className="mt-6 max-w-xl text-base leading-7 text-slate-600 sm:text-lg">每人默想一个词，同时揭晓，再从两个词的交集继续联想。无需下载，发个房间链接就能开玩。</p>
-              <div className="mt-8 flex flex-wrap gap-3 text-sm text-slate-600"><span className="feature"><Clock3 size={16}/> 每轮 60 秒</span><span className="feature"><Link2 size={16}/> 链接邀请好友</span><span className="feature"><Sparkles size={16}/> 同词即通关</span></div>
+              <div className="mt-8 flex flex-wrap gap-3 text-sm text-slate-600"><span className="feature"><Clock3 size={16}/> 30 / 60 秒或不限时</span><span className="feature"><Link2 size={16}/> 链接邀请好友</span><span className="feature"><Sparkles size={16}/> 同词即通关</span></div>
             </div>
             <div className="game-card p-6 sm:p-8">
               <h2 className="text-2xl font-black">开始一局</h2><p className="mt-2 text-sm text-slate-500">创建新房间，或输入朋友发来的房间码。</p>
-              <button className="primary-btn mt-7 w-full" onClick={createRoom} disabled={busy}>{busy ? <LoaderCircle className="animate-spin" size={19}/> : <Sparkles size={19}/>} 创建房间</button>
+              <label className="mt-7 block text-xs font-bold uppercase tracking-[.16em] text-slate-500">每轮思考时间</label>
+              <div className="mt-2 grid grid-cols-3 gap-2" role="group" aria-label="每轮思考时间">
+                {[30, 60, 0].map((seconds) => <button key={seconds} type="button" className={`duration-option ${durationSeconds === seconds ? "selected" : ""}`} onClick={() => setDurationSeconds(seconds)}>{seconds === 0 ? "不限时" : `${seconds} 秒`}</button>)}
+              </div>
+              <button className="primary-btn mt-4 w-full" onClick={createRoom} disabled={busy}>{busy ? <LoaderCircle className="animate-spin" size={19}/> : <Sparkles size={19}/>} 创建房间</button>
               <div className="my-6 flex items-center gap-3 text-xs text-slate-400"><span className="h-px flex-1 bg-slate-200"/>或者<span className="h-px flex-1 bg-slate-200"/></div>
               <label className="text-xs font-bold uppercase tracking-[.16em] text-slate-500">房间码</label>
               <div className="mt-2 flex gap-2"><input className="code-input" value={codeInput} onChange={(e) => setCodeInput(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))} onKeyDown={(e) => e.key === "Enter" && joinRoom()} placeholder="A2BC8D" /><button className="icon-btn" onClick={joinRoom} disabled={busy} aria-label="加入房间"><ArrowRight size={21}/></button></div>
@@ -206,10 +235,24 @@ export default function Game() {
             {room.phase === "thinking" && <Thinking room={room} secondsLeft={secondsLeft} word={word} setWord={setWord} busy={busy} submit={() => act("submit")} />}
             {(room.phase === "revealed" || room.phase === "matched") && room.words && <Reveal room={room} busy={busy} ready={() => act("ready")} match={() => act("match")} restart={() => { localStorage.removeItem(`${TOKEN_KEY}:${code}`); window.location.href = "/"; }} />}
             {error && <p className="error-text mx-auto mt-4">{error}</p>}
+            {connectionStatus !== "online" && <div className="connection-banner" role="status">{connectionStatus === "offline" ? "网络已断开，恢复网络后会自动重连" : "正在恢复房间连接…"}</div>}
             {room.history.length > 0 && <div className="mt-6 rounded-3xl border border-white/70 bg-white/60 p-5 backdrop-blur-sm"><div className="text-xs font-bold uppercase tracking-[.16em] text-slate-400">联想轨迹</div><div className="mt-3 flex flex-wrap gap-2">{room.history.map((item) => <div className="history-chip" key={item.number}><span>{item.number}</span>{item.words[0]} <i>×</i> {item.words[1]}</div>)}</div></div>}
           </section>
         )}
         <footer className="py-3 text-center text-xs text-slate-400">同词相遇 · 两个人的联想小游戏</footer>
+        {previewImage && <div className="preview-backdrop" role="presentation" onClick={() => setPreviewImage(null)}>
+          <section className="preview-modal" role="dialog" aria-modal="true" aria-labelledby="preview-title" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4">
+              <div><h2 id="preview-title" className="text-xl font-black">记录照片预览</h2><p className="mt-1 text-sm text-slate-500">确认版面后再保存到设备</p></div>
+              <button type="button" className="preview-close" aria-label="关闭预览" onClick={() => setPreviewImage(null)}>×</button>
+            </div>
+            <div className="preview-image-wrap"><img src={previewImage} alt="同词相遇游戏记录照片预览" /></div>
+            <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button type="button" className="secondary-btn" onClick={() => setPreviewImage(null)}>返回</button>
+              <button type="button" className="primary-btn" onClick={() => saveRecordImage(previewImage, room?.code ?? "记录")}><Download size={18}/> 保存照片</button>
+            </div>
+          </section>
+        </div>}
       </div>
     </main>
   );
@@ -220,7 +263,7 @@ function Waiting({ room, copied, copyInvite }: { room: RoomState; copied: boolea
 }
 
 function Thinking({ room, secondsLeft, word, setWord, busy, submit }: { room: RoomState; secondsLeft: number; word: string; setWord: (v: string) => void; busy: boolean; submit: () => void }) {
-  return <div className="game-card overflow-hidden"><div className="round-topbar"><span>第 {room.roundNumber} 轮</span><span className={secondsLeft <= 10 ? "timer urgent" : "timer"}><Clock3 size={16}/>{secondsLeft}s</span></div><div className="p-6 text-center sm:p-11"><p className="text-sm font-semibold text-violet-600">根据上一轮的两个词，自由联想</p><h1 className="mt-3 text-3xl font-black sm:text-5xl">写下你脑中的那个词</h1><p className="mt-3 text-sm text-slate-500">提交后不能修改，对方在揭晓前看不到。</p>{!room.mySubmitted ? <div className="mx-auto mt-8 max-w-xl"><input autoFocus className="word-input" value={word} maxLength={32} onChange={(e) => setWord(e.target.value)} onKeyDown={(e) => e.key === "Enter" && word.trim() && submit()} placeholder="输入一个词语…" /><button className="primary-btn mt-4 w-full" onClick={submit} disabled={busy || !word.trim()}>{busy ? <LoaderCircle className="animate-spin" size={19}/> : <Check size={19}/>} 锁定答案</button></div> : <div className="locked-answer mx-auto mt-8 max-w-xl"><span>你的答案</span><strong>{room.myWord}</strong><div className="mt-3 flex items-center justify-center gap-2 text-sm text-slate-500">{room.otherSubmitted ? <><Check size={16}/>对方已提交，马上揭晓</> : <><LoaderCircle className="animate-spin" size={16}/>等待对方提交…</>}</div></div>}</div></div>;
+  return <div className="game-card overflow-hidden"><div className="round-topbar"><span>第 {room.roundNumber} 轮</span><span className={room.durationSeconds > 0 && secondsLeft <= 10 ? "timer urgent" : "timer"}><Clock3 size={16}/>{room.durationSeconds > 0 ? `${secondsLeft}s` : "不限时"}</span></div><div className="p-6 text-center sm:p-11"><p className="text-sm font-semibold text-violet-600">根据上一轮的两个词，自由联想</p><h1 className="mt-3 text-3xl font-black sm:text-5xl">写下你脑中的那个词</h1><p className="mt-3 text-sm text-slate-500">提交后不能修改，对方在揭晓前看不到。</p>{!room.mySubmitted ? <div className="mx-auto mt-8 max-w-xl"><input autoFocus className="word-input" value={word} maxLength={32} onChange={(e) => setWord(e.target.value)} onKeyDown={(e) => e.key === "Enter" && word.trim() && submit()} placeholder="输入一个词语…" /><button className="primary-btn mt-4 w-full" onClick={submit} disabled={busy || !word.trim()}>{busy ? <LoaderCircle className="animate-spin" size={19}/> : <Check size={19}/>} 锁定答案</button></div> : <div className="locked-answer mx-auto mt-8 max-w-xl"><span>你的答案</span><strong>{room.myWord}</strong><div className="mt-3 flex items-center justify-center gap-2 text-sm text-slate-500">{room.otherSubmitted ? <><Check size={16}/>对方已提交，马上揭晓</> : <><LoaderCircle className="animate-spin" size={16}/>等待对方提交…</>}</div></div>}</div></div>;
 }
 
 function Reveal({ room, busy, ready, match, restart }: { room: RoomState; busy: boolean; ready: () => void; match: () => void; restart: () => void }) {
@@ -242,7 +285,7 @@ function Reveal({ room, busy, ready, match, restart }: { room: RoomState; busy: 
             <h1 className="text-2xl font-black sm:text-4xl">{manual ? "双方确认，同词成功！" : `第 ${room.roundNumber} 轮，同词成功！`}</h1>
             <p className="mt-3 text-sm text-slate-500 sm:text-base">表达可以不同，只要你们想到的是同一个东西。</p>
             <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
-              <button className="secondary-btn export-btn" onClick={() => exportRecord(room)}><Download size={19}/> 导出本局记录图片</button>
+              <button className="secondary-btn export-btn" onClick={() => setPreviewImage(createRecordImage(room))}><Download size={19}/> 预览记录照片</button>
               <button className="secondary-btn restart-btn" onClick={restart}>再开一局</button>
             </div>
           </div>
