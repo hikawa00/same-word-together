@@ -1,0 +1,159 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowRight, Check, Clock3, Copy, Link2, LoaderCircle, Sparkles, UsersRound } from "lucide-react";
+
+type RoomState = {
+  code: string; slot: number; phase: "waiting" | "thinking" | "revealed" | "matched";
+  roundNumber: number; deadline: number | null; serverNow: number; myWord: string | null;
+  mySubmitted: boolean; otherSubmitted: boolean; myReady: boolean; otherReady: boolean;
+  words: string[] | null; history: { number: number; words: string[] }[];
+};
+
+const TOKEN_KEY = "same-word-player";
+
+async function api(payload: Record<string, unknown>) {
+  const response = await fetch("/api/game", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "出错了，请重试");
+  return data;
+}
+
+export default function Game() {
+  const [codeInput, setCodeInput] = useState("");
+  const [code, setCode] = useState("");
+  const [token, setToken] = useState("");
+  const [room, setRoom] = useState<RoomState | null>(null);
+  const [word, setWord] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [tick, setTick] = useState(Date.now());
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlCode = (params.get("room") || "").toUpperCase();
+    if (urlCode) setCodeInput(urlCode);
+    const stored = urlCode ? localStorage.getItem(`${TOKEN_KEY}:${urlCode}`) : null;
+    if (urlCode && stored) { setCode(urlCode); setToken(stored); }
+  }, []);
+
+  const refresh = useCallback(async () => {
+    if (!code || !token) return;
+    try {
+      const response = await fetch(`/api/game?code=${encodeURIComponent(code)}&token=${encodeURIComponent(token)}`, { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "同步失败");
+      setRoom(data.room); setError("");
+    } catch (err) { setError(err instanceof Error ? err.message : "同步失败"); }
+  }, [code, token]);
+
+  useEffect(() => {
+    refresh();
+    if (!code || !token) return;
+    const id = window.setInterval(refresh, 1200);
+    return () => window.clearInterval(id);
+  }, [code, token, refresh]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setTick(Date.now()), 250);
+    return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => { if (room && !room.mySubmitted) setWord(""); }, [room?.roundNumber]);
+
+  const secondsLeft = useMemo(() => room?.deadline ? Math.max(0, Math.ceil((room.deadline - tick) / 1000)) : 60, [room?.deadline, tick]);
+
+  function enterRoom(nextCode: string, nextToken: string) {
+    localStorage.setItem(`${TOKEN_KEY}:${nextCode}`, nextToken);
+    window.history.replaceState({}, "", `?room=${nextCode}`);
+    setCode(nextCode); setToken(nextToken);
+  }
+
+  async function createRoom() {
+    setBusy(true); setError("");
+    try { const data = await api({ action: "create" }); enterRoom(data.code, data.token); }
+    catch (err) { setError(err instanceof Error ? err.message : "创建失败"); }
+    finally { setBusy(false); }
+  }
+
+  async function joinRoom() {
+    const nextCode = codeInput.trim().toUpperCase();
+    if (nextCode.length !== 6) { setError("请输入 6 位房间码"); return; }
+    setBusy(true); setError("");
+    try {
+      const stored = localStorage.getItem(`${TOKEN_KEY}:${nextCode}`);
+      if (stored) { enterRoom(nextCode, stored); return; }
+      const data = await api({ action: "join", code: nextCode }); enterRoom(data.code, data.token);
+    } catch (err) { setError(err instanceof Error ? err.message : "加入失败"); }
+    finally { setBusy(false); }
+  }
+
+  async function act(action: "submit" | "ready") {
+    setBusy(true); setError("");
+    try { const data = await api({ action, code, token, word }); if (data.room) setRoom(data.room); }
+    catch (err) { setError(err instanceof Error ? err.message : "操作失败"); }
+    finally { setBusy(false); }
+  }
+
+  async function copyInvite() {
+    await navigator.clipboard.writeText(window.location.href); setCopied(true);
+    window.setTimeout(() => setCopied(false), 1800);
+  }
+
+  return (
+    <main className="game-shell min-h-screen px-4 py-5 sm:px-7 sm:py-8">
+      <div className="mx-auto flex min-h-[calc(100vh-40px)] max-w-5xl flex-col">
+        <header className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="logo-mark"><span /><span /></div>
+            <div><div className="text-lg font-black tracking-tight">同词相遇</div><div className="text-xs text-slate-500">SAME WORD</div></div>
+          </div>
+          {room && <div className="pill"><UsersRound size={15} /> 房间 {room.code}</div>}
+        </header>
+
+        {!room ? (
+          <section className="grid flex-1 items-center gap-10 py-14 lg:grid-cols-[1.15fr_.85fr]">
+            <div>
+              <div className="eyebrow"><Sparkles size={15} /> 两个人，一条脑回路</div>
+              <h1 className="mt-5 max-w-2xl text-5xl font-black leading-[.98] tracking-[-.055em] text-slate-950 sm:text-7xl">你们会在第几轮<br/><span className="gradient-text">想到同一个词？</span></h1>
+              <p className="mt-6 max-w-xl text-base leading-7 text-slate-600 sm:text-lg">每人默想一个词，同时揭晓，再从两个词的交集继续联想。无需下载，发个房间链接就能开玩。</p>
+              <div className="mt-8 flex flex-wrap gap-3 text-sm text-slate-600"><span className="feature"><Clock3 size={16}/> 每轮 60 秒</span><span className="feature"><Link2 size={16}/> 链接邀请好友</span><span className="feature"><Sparkles size={16}/> 同词即通关</span></div>
+            </div>
+            <div className="game-card p-6 sm:p-8">
+              <h2 className="text-2xl font-black">开始一局</h2><p className="mt-2 text-sm text-slate-500">创建新房间，或输入朋友发来的房间码。</p>
+              <button className="primary-btn mt-7 w-full" onClick={createRoom} disabled={busy}>{busy ? <LoaderCircle className="animate-spin" size={19}/> : <Sparkles size={19}/>} 创建房间</button>
+              <div className="my-6 flex items-center gap-3 text-xs text-slate-400"><span className="h-px flex-1 bg-slate-200"/>或者<span className="h-px flex-1 bg-slate-200"/></div>
+              <label className="text-xs font-bold uppercase tracking-[.16em] text-slate-500">房间码</label>
+              <div className="mt-2 flex gap-2"><input className="code-input" value={codeInput} onChange={(e) => setCodeInput(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))} onKeyDown={(e) => e.key === "Enter" && joinRoom()} placeholder="A2BC8D" /><button className="icon-btn" onClick={joinRoom} disabled={busy} aria-label="加入房间"><ArrowRight size={21}/></button></div>
+              {error && <p className="error-text">{error}</p>}
+            </div>
+          </section>
+        ) : (
+          <section className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center py-8 sm:py-12">
+            {room.phase === "waiting" && <Waiting room={room} copied={copied} copyInvite={copyInvite} />}
+            {room.phase === "thinking" && <Thinking room={room} secondsLeft={secondsLeft} word={word} setWord={setWord} busy={busy} submit={() => act("submit")} />}
+            {(room.phase === "revealed" || room.phase === "matched") && room.words && <Reveal room={room} busy={busy} ready={() => act("ready")} restart={() => { localStorage.removeItem(`${TOKEN_KEY}:${code}`); window.location.href = "/"; }} />}
+            {error && <p className="error-text mx-auto mt-4">{error}</p>}
+            {room.history.length > 0 && <div className="mt-6 rounded-3xl border border-white/70 bg-white/60 p-5 backdrop-blur-sm"><div className="text-xs font-bold uppercase tracking-[.16em] text-slate-400">联想轨迹</div><div className="mt-3 flex flex-wrap gap-2">{room.history.map((item) => <div className="history-chip" key={item.number}><span>{item.number}</span>{item.words[0]} <i>×</i> {item.words[1]}</div>)}</div></div>}
+          </section>
+        )}
+        <footer className="py-3 text-center text-xs text-slate-400">同词相遇 · 两个人的联想小游戏</footer>
+      </div>
+    </main>
+  );
+}
+
+function Waiting({ room, copied, copyInvite }: { room: RoomState; copied: boolean; copyInvite: () => void }) {
+  return <div className="game-card p-7 text-center sm:p-12"><div className="waiting-orbit mx-auto"><UsersRound size={29}/></div><div className="mt-6 text-xs font-bold uppercase tracking-[.18em] text-violet-600">房间已创建</div><h1 className="mt-2 text-3xl font-black sm:text-4xl">等另一位玩家加入</h1><p className="mx-auto mt-3 max-w-md text-slate-500">把链接发给朋友。对方加入后，第一轮会自动开始。</p><div className="room-code mt-8">{room.code}</div><button className="primary-btn mx-auto mt-6" onClick={copyInvite}>{copied ? <Check size={18}/> : <Copy size={18}/>} {copied ? "链接已复制" : "复制邀请链接"}</button></div>;
+}
+
+function Thinking({ room, secondsLeft, word, setWord, busy, submit }: { room: RoomState; secondsLeft: number; word: string; setWord: (v: string) => void; busy: boolean; submit: () => void }) {
+  return <div className="game-card overflow-hidden"><div className="round-topbar"><span>第 {room.roundNumber} 轮</span><span className={secondsLeft <= 10 ? "timer urgent" : "timer"}><Clock3 size={16}/>{secondsLeft}s</span></div><div className="p-6 text-center sm:p-11"><p className="text-sm font-semibold text-violet-600">根据上一轮的两个词，自由联想</p><h1 className="mt-3 text-3xl font-black sm:text-5xl">写下你脑中的那个词</h1><p className="mt-3 text-sm text-slate-500">提交后不能修改，对方在揭晓前看不到。</p>{!room.mySubmitted ? <div className="mx-auto mt-8 max-w-xl"><input autoFocus className="word-input" value={word} maxLength={32} onChange={(e) => setWord(e.target.value)} onKeyDown={(e) => e.key === "Enter" && word.trim() && submit()} placeholder="输入一个词语…" /><button className="primary-btn mt-4 w-full" onClick={submit} disabled={busy || !word.trim()}>{busy ? <LoaderCircle className="animate-spin" size={19}/> : <Check size={19}/>} 锁定答案</button></div> : <div className="locked-answer mx-auto mt-8 max-w-xl"><span>你的答案</span><strong>{room.myWord}</strong><div className="mt-3 flex items-center justify-center gap-2 text-sm text-slate-500">{room.otherSubmitted ? <><Check size={16}/>对方已提交，马上揭晓</> : <><LoaderCircle className="animate-spin" size={16}/>等待对方提交…</>}</div></div>}</div></div>;
+}
+
+function Reveal({ room, busy, ready, restart }: { room: RoomState; busy: boolean; ready: () => void; restart: () => void }) {
+  return <div className={room.phase === "matched" ? "game-card win-card overflow-hidden" : "game-card overflow-hidden"}><div className="round-topbar"><span>第 {room.roundNumber} 轮 · 揭晓</span><span>{room.phase === "matched" ? "🎉 同步成功" : "还差一点"}</span></div><div className="p-6 text-center sm:p-11"><p className="text-sm font-semibold text-violet-600">{room.phase === "matched" ? "你们的脑回路终于相遇了" : "从这两个词之间，寻找下一步"}</p><div className="reveal-grid mt-7"><div className="word-card word-a"><span>玩家 1</span><strong>{room.words?.[0]}</strong></div><div className="meet-mark">×</div><div className="word-card word-b"><span>玩家 2</span><strong>{room.words?.[1]}</strong></div></div>{room.phase === "matched" ? <div className="mt-8"><h1 className="text-3xl font-black sm:text-4xl">第 {room.roundNumber} 轮，同词成功！</h1><p className="mt-3 text-slate-500">这条脑回路，算是彻底接通了。</p><button className="secondary-btn mt-6" onClick={restart}>再开一局</button></div> : <div className="mt-8"><button className="primary-btn mx-auto" onClick={ready} disabled={busy || room.myReady}>{room.myReady ? <Check size={19}/> : <ArrowRight size={19}/>} {room.myReady ? (room.otherReady ? "正在进入下一轮" : "等对方准备好") : "我准备好下一轮了"}</button></div>}</div></div>;
+}
