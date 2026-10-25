@@ -158,3 +158,11 @@ body {
 .win-card { box-shadow:0 28px 90px #6341e032,0 0 0 3px #8c6df025; }.history-chip { display:flex; align-items:center; gap:7px; padding:8px 10px; border-radius:10px; background:#fff; color:#555063; font-size:.75rem; font-weight:700; box-shadow:0 4px 16px #4a37640d; }.history-chip span { display:grid; place-items:center; width:20px; height:20px; border-radius:6px; color:#6d4aff; background:#eee9ff; }.history-chip i { color:#aaa2b7; font-style:normal; }
 @keyframes float { 0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)} } @keyframes pulse { 50%{opacity:.55} }
 @media(max-width:560px){.reveal-grid{grid-template-columns:1fr}.meet-mark{height:24px}.game-card{border-radius:24px}.room-code{letter-spacing:.11em}.word-input{height:68px}}
+
+@media(min-width:640px){
+  .reveal-grid + .mt-8 > div { max-width:100%; margin-left:0; margin-right:0; }
+  .reveal-grid + .mt-8 > div > p { width:calc((100% - 58px)/2); }
+  .reveal-grid + .mt-8 > div > div { display:grid; grid-template-columns:1fr 42px 1fr; align-items:center; gap:8px; }
+  .reveal-grid + .mt-8 > div > div > button:first-child { grid-column:1; justify-self:start; margin-left:0; }
+  .reveal-grid + .mt-8 > div > div > button:last-child { grid-column:3; justify-self:end; }
+}
