@@ -233,7 +233,7 @@ export default function Game() {
           <section className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center py-8 sm:py-12">
             {room.phase === "waiting" && <Waiting room={room} copied={copied} copyInvite={copyInvite} />}
             {room.phase === "thinking" && <Thinking room={room} secondsLeft={secondsLeft} word={word} setWord={setWord} busy={busy} submit={() => act("submit")} />}
-            {(room.phase === "revealed" || room.phase === "matched") && room.words && <Reveal room={room} busy={busy} ready={() => act("ready")} match={() => act("match")} restart={() => { localStorage.removeItem(`${TOKEN_KEY}:${code}`); window.location.href = "/"; }} />}
+            {(room.phase === "revealed" || room.phase === "matched") && room.words && <Reveal room={room} busy={busy} ready={() => act("ready")} match={() => act("match")} preview={() => setPreviewImage(createRecordImage(room))} restart={() => { localStorage.removeItem(`${TOKEN_KEY}:${code}`); window.location.href = "/"; }} />}
             {error && <p className="error-text mx-auto mt-4">{error}</p>}
             {connectionStatus !== "online" && <div className="connection-banner" role="status">{connectionStatus === "offline" ? "网络已断开，恢复网络后会自动重连" : "正在恢复房间连接…"}</div>}
             {room.history.length > 0 && <div className="mt-6 rounded-3xl border border-white/70 bg-white/60 p-5 backdrop-blur-sm"><div className="text-xs font-bold uppercase tracking-[.16em] text-slate-400">联想轨迹</div><div className="mt-3 flex flex-wrap gap-2">{room.history.map((item) => <div className="history-chip" key={item.number}><span>{item.number}</span>{item.words[0]} <i>×</i> {item.words[1]}</div>)}</div></div>}
@@ -266,7 +266,7 @@ function Thinking({ room, secondsLeft, word, setWord, busy, submit }: { room: Ro
   return <div className="game-card overflow-hidden"><div className="round-topbar"><span>第 {room.roundNumber} 轮</span><span className={room.durationSeconds > 0 && secondsLeft <= 10 ? "timer urgent" : "timer"}><Clock3 size={16}/>{room.durationSeconds > 0 ? `${secondsLeft}s` : "不限时"}</span></div><div className="p-6 text-center sm:p-11"><p className="text-sm font-semibold text-violet-600">根据上一轮的两个词，自由联想</p><h1 className="mt-3 text-3xl font-black sm:text-5xl">写下你脑中的那个词</h1><p className="mt-3 text-sm text-slate-500">提交后不能修改，对方在揭晓前看不到。</p>{!room.mySubmitted ? <div className="mx-auto mt-8 max-w-xl"><input autoFocus className="word-input" value={word} maxLength={32} onChange={(e) => setWord(e.target.value)} onKeyDown={(e) => e.key === "Enter" && word.trim() && submit()} placeholder="输入一个词语…" /><button className="primary-btn mt-4 w-full" onClick={submit} disabled={busy || !word.trim()}>{busy ? <LoaderCircle className="animate-spin" size={19}/> : <Check size={19}/>} 锁定答案</button></div> : <div className="locked-answer mx-auto mt-8 max-w-xl"><span>你的答案</span><strong>{room.myWord}</strong><div className="mt-3 flex items-center justify-center gap-2 text-sm text-slate-500">{room.otherSubmitted ? <><Check size={16}/>对方已提交，马上揭晓</> : <><LoaderCircle className="animate-spin" size={16}/>等待对方提交…</>}</div></div>}</div></div>;
 }
 
-function Reveal({ room, busy, ready, match, restart }: { room: RoomState; busy: boolean; ready: () => void; match: () => void; restart: () => void }) {
+function Reveal({ room, busy, ready, match, preview, restart }: { room: RoomState; busy: boolean; ready: () => void; match: () => void; preview: () => void; restart: () => void }) {
   const manual = room.matchReason === "manual";
   const matched = room.phase === "matched";
 
@@ -285,7 +285,7 @@ function Reveal({ room, busy, ready, match, restart }: { room: RoomState; busy: 
             <h1 className="text-2xl font-black sm:text-4xl">{manual ? "双方确认，同词成功！" : `第 ${room.roundNumber} 轮，同词成功！`}</h1>
             <p className="mt-3 text-sm text-slate-500 sm:text-base">表达可以不同，只要你们想到的是同一个东西。</p>
             <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
-              <button className="secondary-btn export-btn" onClick={() => setPreviewImage(createRecordImage(room))}><Download size={19}/> 预览记录照片</button>
+              <button className="secondary-btn export-btn" onClick={preview}><Download size={19}/> 预览记录照片</button>
               <button className="secondary-btn restart-btn" onClick={restart}>再开一局</button>
             </div>
           </div>
