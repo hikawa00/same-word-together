@@ -7,6 +7,7 @@ type RoomState = {
   code: string; slot: number; phase: "waiting" | "thinking" | "revealed" | "matched";
   roundNumber: number; deadline: number | null; serverNow: number; myWord: string | null;
   mySubmitted: boolean; otherSubmitted: boolean; myReady: boolean; otherReady: boolean;
+  myMatchVote: boolean; otherMatchVote: boolean; matchReason: "exact" | "manual" | null;
   words: string[] | null; history: { number: number; words: string[] }[];
 };
 
@@ -91,7 +92,7 @@ export default function Game() {
     finally { setBusy(false); }
   }
 
-  async function act(action: "submit" | "ready") {
+  async function act(action: "submit" | "ready" | "match") {
     setBusy(true); setError("");
     try { const data = await api({ action, code, token, word }); if (data.room) setRoom(data.room); }
     catch (err) { setError(err instanceof Error ? err.message : "操作失败"); }
@@ -135,7 +136,7 @@ export default function Game() {
           <section className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center py-8 sm:py-12">
             {room.phase === "waiting" && <Waiting room={room} copied={copied} copyInvite={copyInvite} />}
             {room.phase === "thinking" && <Thinking room={room} secondsLeft={secondsLeft} word={word} setWord={setWord} busy={busy} submit={() => act("submit")} />}
-            {(room.phase === "revealed" || room.phase === "matched") && room.words && <Reveal room={room} busy={busy} ready={() => act("ready")} restart={() => { localStorage.removeItem(`${TOKEN_KEY}:${code}`); window.location.href = "/"; }} />}
+            {(room.phase === "revealed" || room.phase === "matched") && room.words && <Reveal room={room} busy={busy} ready={() => act("ready")} match={() => act("match")} restart={() => { localStorage.removeItem(`${TOKEN_KEY}:${code}`); window.location.href = "/"; }} />}
             {error && <p className="error-text mx-auto mt-4">{error}</p>}
             {room.history.length > 0 && <div className="mt-6 rounded-3xl border border-white/70 bg-white/60 p-5 backdrop-blur-sm"><div className="text-xs font-bold uppercase tracking-[.16em] text-slate-400">联想轨迹</div><div className="mt-3 flex flex-wrap gap-2">{room.history.map((item) => <div className="history-chip" key={item.number}><span>{item.number}</span>{item.words[0]} <i>×</i> {item.words[1]}</div>)}</div></div>}
           </section>
@@ -154,6 +155,7 @@ function Thinking({ room, secondsLeft, word, setWord, busy, submit }: { room: Ro
   return <div className="game-card overflow-hidden"><div className="round-topbar"><span>第 {room.roundNumber} 轮</span><span className={secondsLeft <= 10 ? "timer urgent" : "timer"}><Clock3 size={16}/>{secondsLeft}s</span></div><div className="p-6 text-center sm:p-11"><p className="text-sm font-semibold text-violet-600">根据上一轮的两个词，自由联想</p><h1 className="mt-3 text-3xl font-black sm:text-5xl">写下你脑中的那个词</h1><p className="mt-3 text-sm text-slate-500">提交后不能修改，对方在揭晓前看不到。</p>{!room.mySubmitted ? <div className="mx-auto mt-8 max-w-xl"><input autoFocus className="word-input" value={word} maxLength={32} onChange={(e) => setWord(e.target.value)} onKeyDown={(e) => e.key === "Enter" && word.trim() && submit()} placeholder="输入一个词语…" /><button className="primary-btn mt-4 w-full" onClick={submit} disabled={busy || !word.trim()}>{busy ? <LoaderCircle className="animate-spin" size={19}/> : <Check size={19}/>} 锁定答案</button></div> : <div className="locked-answer mx-auto mt-8 max-w-xl"><span>你的答案</span><strong>{room.myWord}</strong><div className="mt-3 flex items-center justify-center gap-2 text-sm text-slate-500">{room.otherSubmitted ? <><Check size={16}/>对方已提交，马上揭晓</> : <><LoaderCircle className="animate-spin" size={16}/>等待对方提交…</>}</div></div>}</div></div>;
 }
 
-function Reveal({ room, busy, ready, restart }: { room: RoomState; busy: boolean; ready: () => void; restart: () => void }) {
-  return <div className={room.phase === "matched" ? "game-card win-card overflow-hidden" : "game-card overflow-hidden"}><div className="round-topbar"><span>第 {room.roundNumber} 轮 · 揭晓</span><span>{room.phase === "matched" ? "🎉 同步成功" : "还差一点"}</span></div><div className="p-6 text-center sm:p-11"><p className="text-sm font-semibold text-violet-600">{room.phase === "matched" ? "你们的脑回路终于相遇了" : "从这两个词之间，寻找下一步"}</p><div className="reveal-grid mt-7"><div className="word-card word-a"><span>玩家 1</span><strong>{room.words?.[0]}</strong></div><div className="meet-mark">×</div><div className="word-card word-b"><span>玩家 2</span><strong>{room.words?.[1]}</strong></div></div>{room.phase === "matched" ? <div className="mt-8"><h1 className="text-3xl font-black sm:text-4xl">第 {room.roundNumber} 轮，同词成功！</h1><p className="mt-3 text-slate-500">这条脑回路，算是彻底接通了。</p><button className="secondary-btn mt-6" onClick={restart}>再开一局</button></div> : <div className="mt-8"><button className="primary-btn mx-auto" onClick={ready} disabled={busy || room.myReady}>{room.myReady ? <Check size={19}/> : <ArrowRight size={19}/>} {room.myReady ? (room.otherReady ? "正在进入下一轮" : "等对方准备好") : "我准备好下一轮了"}</button></div>}</div></div>;
+function Reveal({ room, busy, ready, match, restart }: { room: RoomState; busy: boolean; ready: () => void; match: () => void; restart: () => void }) {
+  const manual = room.matchReason === "manual";
+  return <div className={room.phase === "matched" ? "game-card win-card overflow-hidden" : "game-card overflow-hidden"}><div className="round-topbar"><span>第 {room.roundNumber} 轮 · 揭晓</span><span>{room.phase === "matched" ? "🎉 同步成功" : "还差一点"}</span></div><div className="p-6 text-center sm:p-11"><p className="text-sm font-semibold text-violet-600">{room.phase === "matched" ? (manual ? "你们一致认为，这是同一个意思" : "你们的脑回路终于相遇了") : "从这两个词之间，寻找下一步"}</p><div className="reveal-grid mt-7"><div className="word-card word-a"><span>玩家 1</span><strong>{room.words?.[0]}</strong></div><div className="meet-mark">×</div><div className="word-card word-b"><span>玩家 2</span><strong>{room.words?.[1]}</strong></div></div>{room.phase === "matched" ? <div className="mt-8"><h1 className="text-3xl font-black sm:text-4xl">{manual ? "双方确认，同词成功！" : `第 ${room.roundNumber} 轮，同词成功！`}</h1><p className="mt-3 text-slate-500">表达可以不同，只要你们想到的是同一个东西。</p><button className="secondary-btn mt-6" onClick={restart}>再开一局</button></div> : <div className="mt-8"><p className="mb-4 text-sm text-slate-500">觉得两个词说的是同一个东西？双方确认也算成功。</p><div className="flex flex-col justify-center gap-3 sm:flex-row"><button className="secondary-btn" onClick={match} disabled={busy || room.myMatchVote}>{room.myMatchVote ? <Check size={19}/> : <Sparkles size={19}/>} {room.myMatchVote ? "已确认，等待对方" : room.otherMatchVote ? "对方认为相同，我也同意" : "我认为意思相同"}</button><button className="primary-btn" onClick={ready} disabled={busy || room.myReady}>{room.myReady ? <Check size={19}/> : <ArrowRight size={19}/>} {room.myReady ? (room.otherReady ? "正在进入下一轮" : "等对方准备好") : "继续下一轮"}</button></div></div>}</div></div>;
 }

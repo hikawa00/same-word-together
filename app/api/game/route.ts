@@ -45,10 +45,12 @@ async function stateFor(code: string, token: string) {
   const deadline = current ? new Date(current.startedAt).getTime() + ROUND_MS : null;
   const bothSubmitted = Boolean(current?.playerOneWord && current?.playerTwoWord);
   const revealed = Boolean(current && (bothSubmitted || (deadline !== null && now >= deadline)));
-  const matched = Boolean(
+  const exactMatch = Boolean(
     revealed && current?.playerOneWord && current?.playerTwoWord &&
     normalizeWord(current.playerOneWord) === normalizeWord(current.playerTwoWord),
   );
+  const manualMatch = Boolean(revealed && current?.playerOneMatch && current?.playerTwoMatch);
+  const matched = exactMatch || manualMatch;
 
   return {
     room: {
@@ -63,6 +65,9 @@ async function stateFor(code: string, token: string) {
       otherSubmitted: current ? Boolean(slot === 1 ? current.playerTwoWord : current.playerOneWord) : false,
       myReady: current ? Boolean(slot === 1 ? current.playerOneReady : current.playerTwoReady) : false,
       otherReady: current ? Boolean(slot === 1 ? current.playerTwoReady : current.playerOneReady) : false,
+      myMatchVote: current ? Boolean(slot === 1 ? current.playerOneMatch : current.playerTwoMatch) : false,
+      otherMatchVote: current ? Boolean(slot === 1 ? current.playerTwoMatch : current.playerOneMatch) : false,
+      matchReason: matched ? (exactMatch ? "exact" : "manual") : null,
       words: revealed ? [current?.playerOneWord || "（未提交）", current?.playerTwoWord || "（未提交）"] : null,
       history: allRounds.filter((round) => round.number < room.currentRound).map((round) => ({
         number: round.number,
@@ -143,11 +148,21 @@ export async function POST(request: Request) {
       await db.update(rounds)
         .set(slot === 1 ? { playerOneWord: word, playerOneSubmittedAt: now } : { playerTwoWord: word, playerTwoSubmittedAt: now })
         .where(and(eq(rounds.roomCode, code), eq(rounds.number, room.currentRound)));
+    } else if (action === "match") {
+      const deadline = new Date(current.startedAt).getTime() + ROUND_MS;
+      const revealed = Boolean((current.playerOneWord && current.playerTwoWord) || Date.now() >= deadline);
+      if (!revealed) return fail("还没到揭晓时间。", 409);
+      await db.update(rounds)
+        .set(slot === 1 ? { playerOneMatch: true } : { playerTwoMatch: true })
+        .where(and(eq(rounds.roomCode, code), eq(rounds.number, room.currentRound)));
     } else if (action === "ready") {
       const deadline = new Date(current.startedAt).getTime() + ROUND_MS;
       const revealed = Boolean((current.playerOneWord && current.playerTwoWord) || Date.now() >= deadline);
       if (!revealed) return fail("还没到揭晓时间。", 409);
-      const matched = Boolean(current.playerOneWord && current.playerTwoWord && normalizeWord(current.playerOneWord) === normalizeWord(current.playerTwoWord));
+      const matched = Boolean(
+        (current.playerOneWord && current.playerTwoWord && normalizeWord(current.playerOneWord) === normalizeWord(current.playerTwoWord)) ||
+        (current.playerOneMatch && current.playerTwoMatch),
+      );
       if (matched) return fail("已经成功想到同一个词啦！", 409);
       await db.update(rounds)
         .set(slot === 1 ? { playerOneReady: true } : { playerTwoReady: true })

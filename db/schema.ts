@@ -22,6 +22,8 @@ export const rounds = sqliteTable(
     playerTwoSubmittedAt: text("player_two_submitted_at"),
     playerOneReady: integer("player_one_ready", { mode: "boolean" }).notNull().default(false),
     playerTwoReady: integer("player_two_ready", { mode: "boolean" }).notNull().default(false),
+    playerOneMatch: integer("player_one_match", { mode: "boolean" }).notNull().default(false),
+    playerTwoMatch: integer("player_two_match", { mode: "boolean" }).notNull().default(false),
   },
   (table) => [primaryKey({ columns: [table.roomCode, table.number] })],
 );
