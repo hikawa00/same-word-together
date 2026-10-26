@@ -171,6 +171,8 @@ body {
 .restart-btn { color:#5b6577; background:#f1f3f8; }
 .duration-option { min-height:44px; border:1px solid #e5e0ef; border-radius:12px; background:#fff; color:#625b76; font-size:.88rem; font-weight:800; transition:.18s ease; }
 .duration-option.selected { border-color:#7959ee; color:#6245dc; background:#f1edff; box-shadow:0 0 0 3px #7959ee16; }
+.duration-input { width:108px; height:42px; border:1px solid #ded9ea; border-radius:12px; outline:none; background:#fff; padding:0 12px; color:#28233a; font-size:1rem; font-weight:800; text-align:center; }
+.duration-input:focus { border-color:#7959ee; box-shadow:0 0 0 4px #7959ee18; }
 .connection-banner { position:fixed; z-index:20; top:14px; left:50%; transform:translateX(-50%); width:max-content; max-width:calc(100vw - 28px); padding:10px 16px; border:1px solid #f2d79a; border-radius:999px; background:#fff9e9; color:#825f19; box-shadow:0 8px 28px #3a2a131c; font-size:.82rem; font-weight:800; text-align:center; }
 .preview-backdrop { position:fixed; z-index:50; inset:0; display:grid; place-items:center; padding:16px; background:#171727a8; backdrop-filter:blur(8px); }
 .preview-modal { display:flex; width:min(100%,680px); max-height:min(92vh,900px); flex-direction:column; overflow:hidden; border:1px solid #ffffffa8; border-radius:24px; background:#fff; padding:20px; box-shadow:0 30px 100px #11182750; }

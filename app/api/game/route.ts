@@ -101,7 +101,9 @@ export async function POST(request: Request) {
 
     if (action === "create") {
       const requestedDuration = Number(body.durationSeconds ?? 60);
-      if (![0, 30, 60].includes(requestedDuration)) return fail("请选择 30 秒、60 秒或不限时。", 400);
+      if (!Number.isInteger(requestedDuration) || requestedDuration < 10 || requestedDuration > 3600) {
+        return fail("每轮时长请设为 10–3600 秒。", 400);
+      }
       const token = crypto.randomUUID();
       const now = new Date().toISOString();
       for (let attempt = 0; attempt < 8; attempt += 1) {

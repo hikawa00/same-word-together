@@ -105,7 +105,8 @@ export default function Game() {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [tick, setTick] = useState(Date.now());
-  const [durationSeconds, setDurationSeconds] = useState(60);
+  const [durationMode, setDurationMode] = useState<"30" | "60" | "custom">("60");
+  const [customDurationSeconds, setCustomDurationSeconds] = useState(90);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<"online" | "reconnecting" | "offline">("online");
 
@@ -168,6 +169,10 @@ export default function Game() {
 
   async function createRoom() {
     setBusy(true); setError("");
+    const durationSeconds = durationMode === "custom" ? customDurationSeconds : Number(durationMode);
+    if (!Number.isInteger(durationSeconds) || durationSeconds < 10 || durationSeconds > 3600) {
+      setError("自定义时长请设为 10–3600 秒"); setBusy(false); return;
+    }
     try { const data = await api({ action: "create", durationSeconds }); enterRoom(data.code, data.token); }
     catch (err) { setError(err instanceof Error ? err.message : "创建失败"); }
     finally { setBusy(false); }
@@ -214,14 +219,18 @@ export default function Game() {
               <div className="eyebrow"><Sparkles size={15} /> 两个人，一条脑回路</div>
               <h1 className="mt-5 max-w-2xl text-5xl font-black leading-[.98] tracking-[-.055em] text-slate-950 sm:text-7xl">你们会在第几轮<br/><span className="gradient-text">想到同一个词？</span></h1>
               <p className="mt-6 max-w-xl text-base leading-7 text-slate-600 sm:text-lg">每人默想一个词，同时揭晓，再从两个词的交集继续联想。无需下载，发个房间链接就能开玩。</p>
-              <div className="mt-8 flex flex-wrap gap-3 text-sm text-slate-600"><span className="feature"><Clock3 size={16}/> 30 / 60 秒或不限时</span><span className="feature"><Link2 size={16}/> 链接邀请好友</span><span className="feature"><Sparkles size={16}/> 同词即通关</span></div>
+              <div className="mt-8 flex flex-wrap gap-3 text-sm text-slate-600"><span className="feature"><Clock3 size={16}/> 30 / 60 秒或自定义</span><span className="feature"><Link2 size={16}/> 链接邀请好友</span><span className="feature"><Sparkles size={16}/> 同词即通关</span></div>
             </div>
             <div className="game-card p-6 sm:p-8">
               <h2 className="text-2xl font-black">开始一局</h2><p className="mt-2 text-sm text-slate-500">创建新房间，或输入朋友发来的房间码。</p>
               <label className="mt-7 block text-xs font-bold uppercase tracking-[.16em] text-slate-500">每轮思考时间</label>
               <div className="mt-2 grid grid-cols-3 gap-2" role="group" aria-label="每轮思考时间">
-                {[30, 60, 0].map((seconds) => <button key={seconds} type="button" className={`duration-option ${durationSeconds === seconds ? "selected" : ""}`} onClick={() => setDurationSeconds(seconds)}>{seconds === 0 ? "不限时" : `${seconds} 秒`}</button>)}
+                {(["30", "60", "custom"] as const).map((mode) => <button key={mode} type="button" className={`duration-option ${durationMode === mode ? "selected" : ""}`} onClick={() => setDurationMode(mode)}>{mode === "custom" ? "自定义" : `${mode} 秒`}</button>)}
               </div>
+              {durationMode === "custom" && <label className="mt-3 flex items-center gap-3 text-sm font-semibold text-slate-600">每轮
+                <input aria-label="自定义每轮时长（秒）" className="duration-input" type="number" min={10} max={3600} step={5} value={customDurationSeconds} onChange={(event) => setCustomDurationSeconds(Number(event.target.value))} />
+                秒 <span className="text-xs font-normal text-slate-400">10–3600 秒</span>
+              </label>}
               <button className="primary-btn mt-4 w-full" onClick={createRoom} disabled={busy}>{busy ? <LoaderCircle className="animate-spin" size={19}/> : <Sparkles size={19}/>} 创建房间</button>
               <div className="my-6 flex items-center gap-3 text-xs text-slate-400"><span className="h-px flex-1 bg-slate-200"/>或者<span className="h-px flex-1 bg-slate-200"/></div>
               <label className="text-xs font-bold uppercase tracking-[.16em] text-slate-500">房间码</label>
