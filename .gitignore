@@ -31,6 +31,10 @@ yarn-error.log*
 .dev.vars*
 *.pem
 
+# Account-specific deployment settings (keep local)
+/wrangler.direct.jsonc
+/.openai/hosting.json
+
 # Checkout-local tool state
 /.wrangler/
 /.sites-runtime/

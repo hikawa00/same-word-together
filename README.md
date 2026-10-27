@@ -24,20 +24,7 @@ npm ci
 npm run dev
 ```
 
-本地开发服务器由 Vinext 启动。多人房间状态保存在 Cloudflare D1 中；本地开发或部署时需要配置对应的 D1 数据库绑定。
-
-## 部署到 Cloudflare Worker
-
-项目使用 Cloudflare Workers、Vinext 和 D1。当前项目的部署配置在 `wrangler.direct.jsonc`，其中 D1 数据库 ID 属于项目所有者的 Cloudflare 账户。数据库 ID 是资源标识，不是访问凭证；部署到自己的账户时，请先换成自己的 D1 数据库并配置数据库绑定。不要提交 Cloudflare API Token、`.env` 或 `.dev.vars` 等密钥。
-
-```bash
-npm ci
-npm run build
-npx wrangler login
-npx wrangler deploy --config wrangler.direct.jsonc
-```
-
-首次部署到自己的 D1 数据库时，还需要按顺序应用 `drizzle/` 下的 SQL 迁移文件。
+本地开发服务器由 Vinext 启动。多人房间状态保存在 Cloudflare D1 中；本地运行需要有名为 `DB` 的 D1 绑定。账户专属的 Cloudflare 部署配置保存在项目所有者的本地文件中，不上传到这个仓库。
 
 ## 代码结构
 
@@ -54,8 +41,7 @@ db/
   schema.ts                D1 数据表结构（房间与每轮答案）
   index.ts                 Drizzle ORM 与 D1 绑定
 drizzle/                   数据库迁移 SQL
-worker/index.ts            Cloudflare Worker 入口
-wrangler.direct.jsonc      直接部署到 Cloudflare 的 Worker 与 D1 配置
+worker/index.ts            Worker 运行时入口
 public/                    静态资源，例如网站图标
 components/ui/             通用 UI 组件库；当前游戏主界面主要使用 app/globals.css 中的自定义样式
 hooks/                     通用 React hooks
