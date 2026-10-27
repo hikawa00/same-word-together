@@ -216,9 +216,9 @@ export default function Game() {
         {!room ? (
           <section className="grid flex-1 items-center gap-10 py-14 lg:grid-cols-[1.15fr_.85fr]">
             <div>
-              <div className="eyebrow"><Sparkles size={15} /> 两个人，一条脑回路</div>
-              <h1 className="mt-5 max-w-2xl text-5xl font-black leading-[.98] tracking-[-.055em] text-slate-950 sm:text-7xl">你们会在第几轮<br/><span className="gradient-text">想到同一个词？</span></h1>
-              <p className="mt-6 max-w-xl text-base leading-7 text-slate-600 sm:text-lg">每人默想一个词，同时揭晓，再从两个词的交集继续联想。无需下载，发个房间链接就能开玩。</p>
+              <div className="eyebrow"><UsersRound size={15} /> 词不一样？加练一轮！</div>
+              <h1 className="mt-5 max-w-2xl text-4xl font-black leading-[1.04] tracking-[-.04em] text-slate-950 sm:text-5xl">你们会在第几轮<br/><span className="gradient-text">想到同一个词？</span></h1>
+              <p className="mt-6 max-w-xl text-base leading-7 text-slate-600 sm:text-lg">各想一个词，同时揭晓；没撞上，就从这两个词继续联想。线上开局，不用真的跑步，发个链接就能玩。</p>
               <div className="mt-8 flex flex-wrap gap-3 text-sm text-slate-600"><span className="feature"><Clock3 size={16}/> 30 / 60 秒或自定义</span><span className="feature"><Link2 size={16}/> 链接邀请好友</span><span className="feature"><Sparkles size={16}/> 同词即通关</span></div>
             </div>
             <div className="game-card p-6 sm:p-8">
