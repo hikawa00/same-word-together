@@ -2,7 +2,7 @@
 
 两个人在线玩联想词语小游戏：各自想一个词，同时揭晓；没想到一起，就从两个词继续联想，直到撞上同一个词。
 
-在线体验：[same-word-together-direct.furongyouxianghong.workers.dev](https://same-word-together-direct.furongyouxianghong.workers.dev)
+在线体验：[samewordgame.hikawa00.top](https://samewordgame.hikawa00.top)
 
 ## 怎么玩
 
@@ -28,7 +28,7 @@ npm run dev
 
 ## 部署到 Cloudflare Worker
 
-项目使用 Cloudflare Workers、Vinext 和 D1。当前项目的部署配置在 `wrangler.direct.jsonc`，其中 D1 数据库 ID 属于项目所有者的 Cloudflare 账户。部署到自己的账户时，请先换成自己的 D1 数据库并配置数据库绑定。
+项目使用 Cloudflare Workers、Vinext 和 D1。当前项目的部署配置在 `wrangler.direct.jsonc`，其中 D1 数据库 ID 属于项目所有者的 Cloudflare 账户。数据库 ID 是资源标识，不是访问凭证；部署到自己的账户时，请先换成自己的 D1 数据库并配置数据库绑定。不要提交 Cloudflare API Token、`.env` 或 `.dev.vars` 等密钥。
 
 ```bash
 npm ci
@@ -40,6 +40,8 @@ npx wrangler deploy --config wrangler.direct.jsonc
 首次部署到自己的 D1 数据库时，还需要按顺序应用 `drizzle/` 下的 SQL 迁移文件。
 
 ## 代码结构
+
+游戏本身的核心代码主要集中在 `app/`、`db/` 和 `drizzle/`；仓库里其他目录还包含框架工具、通用组件和示例。
 
 ```text
 app/
@@ -55,9 +57,17 @@ drizzle/                   数据库迁移 SQL
 worker/index.ts            Cloudflare Worker 入口
 wrangler.direct.jsonc      直接部署到 Cloudflare 的 Worker 与 D1 配置
 public/                    静态资源，例如网站图标
+components/ui/             通用 UI 组件库；当前游戏主界面主要使用 app/globals.css 中的自定义样式
+hooks/                     通用 React hooks
+lib/                       UI、连接器等辅助函数
+scripts/                   安装、构建和运行框架的项目脚本
+examples/d1/               D1 使用示例，不属于游戏主流程
+vendor/                    第三方样式资源；globals.css 会导入其中的样式
 ```
 
 房间与回合业务主要在 `app/api/game/route.ts`，界面和玩家操作主要在 `app/game.tsx`。页面约每 1.2 秒向 API 拉取一次房间状态，用于同步另一位玩家的操作。
+
+如果只想改游戏玩法或首页界面，通常先看 `app/game.tsx` 和 `app/api/game/route.ts`；要调整数据库字段时，再看 `db/schema.ts` 与 `drizzle/`。
 
 ## 技术栈
 
