@@ -11,6 +11,7 @@ export const rooms = sqliteTable("rooms", {
   status: text("status").notNull().default("waiting"),
   isPublic: integer("is_public", { mode: "boolean" }).notNull().default(false),
   description: text("description"),
+  rematchCode: text("rematch_code"),
   lastSeenAt: text("last_seen_at"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),

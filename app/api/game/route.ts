@@ -35,9 +35,68 @@ function slotFor(room: typeof rooms.$inferSelect, token: string) {
   return 0;
 }
 
+function tokenForSlot(room: typeof rooms.$inferSelect, slot: number) {
+  return [room.playerOneToken, room.playerTwoToken, room.playerThreeToken][slot - 1] ?? null;
+}
+
+async function ensureRematchRoom(room: typeof rooms.$inferSelect) {
+  const db = getDb();
+  const latestRoom = await db.query.rooms.findFirst({ where: eq(rooms.code, room.code) });
+  if (!latestRoom || latestRoom.rematchCode) return;
+
+  const now = new Date().toISOString();
+  let nextCode: string | null = null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const candidateCode = randomCode();
+    try {
+      await db.insert(rooms).values({
+        code: candidateCode,
+        playerOneToken: crypto.randomUUID(),
+        playerTwoToken: latestRoom.playerTwoToken ? crypto.randomUUID() : null,
+        playerThreeToken: latestRoom.playerThreeToken ? crypto.randomUUID() : null,
+        currentRound: 1,
+        durationSeconds: latestRoom.durationSeconds,
+        playerCount: latestRoom.playerCount,
+        status: "active",
+        isPublic: false,
+        description: null,
+        lastSeenAt: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+      nextCode = candidateCode;
+      break;
+    } catch (error) {
+      if (attempt === 7) throw error;
+    }
+  }
+  if (!nextCode) throw new Error("无法创建下一局房间。");
+
+  try {
+    await db.insert(rounds).values({ roomCode: nextCode, number: 1, startedAt: now });
+    const claimed = await db.update(rooms)
+      .set({ rematchCode: nextCode, updatedAt: now })
+      .where(and(eq(rooms.code, latestRoom.code), isNull(rooms.rematchCode)))
+      .returning({ code: rooms.code });
+    if (claimed.length) return;
+  } catch (error) {
+    const latest = await db.query.rooms.findFirst({ where: eq(rooms.code, latestRoom.code) });
+    if (latest?.rematchCode === nextCode) return;
+    await db.delete(rooms).where(eq(rooms.code, nextCode));
+    const winner = await db.query.rooms.findFirst({ where: eq(rooms.code, latestRoom.code) });
+    if (winner?.rematchCode) return;
+    throw error;
+  }
+
+  await db.delete(rooms).where(eq(rooms.code, nextCode));
+  const winner = await db.query.rooms.findFirst({ where: eq(rooms.code, latestRoom.code) });
+  if (winner?.rematchCode) return;
+  throw new Error("无法确认下一局房间，请重试。");
+}
+
 async function stateFor(code: string, token: string) {
   const db = getDb();
-  const room = await db.query.rooms.findFirst({ where: eq(rooms.code, code) });
+  let room = await db.query.rooms.findFirst({ where: eq(rooms.code, code) });
   if (!room) return { error: "房间不存在，检查一下房间码吧。", status: 404 } as const;
   const slot = slotFor(room, token);
   if (!slot) return { error: "房间已满，或当前设备尚未加入。", status: 403 } as const;
@@ -62,6 +121,15 @@ async function stateFor(code: string, token: string) {
   const exactMatch = Boolean(revealed && allSubmitted && words.every((word) => normalizeWord(word) === normalizeWord(words[0])));
   const manualMatch = Boolean(revealed && matchFlags.length === room.playerCount && matchFlags.every(Boolean));
   const matched = exactMatch || manualMatch;
+  if (matched && readyFlags.length === room.playerCount && readyFlags.every(Boolean) && !room.rematchCode) {
+    await ensureRematchRoom(room);
+    room = (await db.query.rooms.findFirst({ where: eq(rooms.code, code) })) ?? room;
+  }
+  const nextRoom = room.rematchCode
+    ? await db.query.rooms.findFirst({ where: eq(rooms.code, room.rematchCode) })
+    : null;
+  const rematchToken = nextRoom ? tokenForSlot(nextRoom, slot) : null;
+  const rematch = nextRoom && rematchToken ? { code: nextRoom.code, token: rematchToken } : null;
   const joinedPlayerCount = [room.playerOneToken, room.playerTwoToken, room.playerThreeToken].slice(0, room.playerCount).filter(Boolean).length;
   const myWord = words[slot - 1] ?? null;
   const otherSubmittedCount = words.filter(Boolean).length - Number(Boolean(myWord));
@@ -72,6 +140,7 @@ async function stateFor(code: string, token: string) {
     room: {
       code,
       slot,
+      rematch,
       phase: joinedPlayerCount < room.playerCount ? "waiting" : matched ? "matched" : revealed ? "revealed" : "thinking",
       isPublic: room.isPublic,
       description: room.description,
@@ -255,14 +324,14 @@ export async function POST(request: Request) {
         (words.length === room.playerCount && words.every(Boolean) && words.every((word) => normalizeWord(word) === normalizeWord(words[0]))) ||
         (matchFlags.length === room.playerCount && matchFlags.every(Boolean)),
       );
-      if (matched) return fail("已经成功想到同一个词啦！", 409);
       await db.update(rounds)
         .set(slot === 1 ? { playerOneReady: true } : slot === 2 ? { playerTwoReady: true } : { playerThreeReady: true })
         .where(and(eq(rounds.roomCode, code), eq(rounds.number, room.currentRound)));
       const refreshed = await db.query.rounds.findFirst({
         where: and(eq(rounds.roomCode, code), eq(rounds.number, room.currentRound)),
       });
-      if (refreshed?.playerOneReady && refreshed.playerTwoReady && (room.playerCount !== 3 || refreshed.playerThreeReady)) {
+      const everyoneReady = Boolean(refreshed?.playerOneReady && refreshed.playerTwoReady && (room.playerCount !== 3 || refreshed.playerThreeReady));
+      if (everyoneReady && !matched) {
         const nextNumber = room.currentRound + 1;
         const now = new Date().toISOString();
         await db.insert(rounds).values({ roomCode: code, number: nextNumber, startedAt: now }).onConflictDoNothing();

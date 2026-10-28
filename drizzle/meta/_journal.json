@@ -36,6 +36,13 @@
       "when": 1793111865558,
       "tag": "0004_three_player_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1793173175001,
+      "tag": "0005_room_rematch",
+      "breakpoints": true
     }
   ]
 }

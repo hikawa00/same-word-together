@@ -4,7 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { ArrowRight, Check, Clock3, Copy, Download, Link2, LoaderCircle, Sparkles, UsersRound } from "lucide-react";
 
 type RoomState = {
-  code: string; slot: number; phase: "waiting" | "thinking" | "revealed" | "matched";
+  code: string; slot: number; rematch: { code: string; token: string } | null; phase: "waiting" | "thinking" | "revealed" | "matched";
   roundNumber: number; durationSeconds: number; deadline: number | null; serverNow: number; myWord: string | null;
   isPublic: boolean; description: string | null; playerCount: 2 | 3; joinedPlayerCount: number;
   mySubmitted: boolean; otherSubmittedCount: number; submittedCount: number;
@@ -182,6 +182,15 @@ export default function Game() {
   const [saveFeedback, setSaveFeedback] = useState("");
   const [connectionStatus, setConnectionStatus] = useState<"online" | "reconnecting" | "offline">("online");
   const autoSubmittedRoundRef = useRef<number | null>(null);
+  const enterRoom = useCallback((nextCode: string, nextToken: string) => {
+    localStorage.setItem(`${TOKEN_KEY}:${nextCode}`, nextToken);
+    window.history.replaceState({}, "", `?room=${nextCode}`);
+    setRoom(null);
+    setError("");
+    setConnectionStatus("online");
+    setCode(nextCode);
+    setToken(nextToken);
+  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -197,13 +206,17 @@ export default function Game() {
       const response = await fetch(`/api/game?code=${encodeURIComponent(code)}&token=${encodeURIComponent(token)}`, { cache: "no-store" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "同步失败");
+      if (data.room?.rematch) {
+        enterRoom(data.room.rematch.code, data.room.rematch.token);
+        return true;
+      }
       setRoom(data.room); setError(""); setConnectionStatus("online");
       return true;
     } catch {
       setConnectionStatus(navigator.onLine ? "reconnecting" : "offline");
       return false;
     }
-  }, [code, token]);
+  }, [code, token, enterRoom]);
 
   useEffect(() => {
     if (!code || !token) return;
@@ -274,11 +287,7 @@ export default function Game() {
 
   const secondsLeft = useMemo(() => room?.deadline ? Math.max(0, Math.ceil((room.deadline - tick) / 1000)) : room?.durationSeconds ?? 60, [room?.deadline, room?.durationSeconds, tick]);
 
-  function enterRoom(nextCode: string, nextToken: string) {
-    localStorage.setItem(`${TOKEN_KEY}:${nextCode}`, nextToken);
-    window.history.replaceState({}, "", `?room=${nextCode}`);
-    setCode(nextCode); setToken(nextToken);
-  }
+
 
   async function createRoom() {
     setBusy(true); setError("");
@@ -307,10 +316,11 @@ export default function Game() {
     setBusy(true); setError("");
     try {
       const data = await api({ action, code, token, word, ...(options?.autoSubmit ? { autoSubmit: true } : {}) });
-      if (data.room) setRoom(data.room);
+      if (data.room?.rematch) enterRoom(data.room.rematch.code, data.room.rematch.token);
+      else if (data.room) setRoom(data.room);
     } catch (err) { setError(err instanceof Error ? err.message : "操作失败"); }
     finally { setBusy(false); }
-  }, [code, token, word]);
+  }, [code, token, word, enterRoom]);
 
   useEffect(() => {
     if (!room || room.mySubmitted || !word.trim() || !room.deadline || secondsLeft > 0) return;
@@ -486,10 +496,17 @@ function Reveal({ room, busy, ready, match, preview, restart }: { room: RoomStat
         {matched ? (
           <div className="mt-7 sm:mt-8">
             <h1 className="text-2xl font-black sm:text-4xl">{manual ? `${room.playerCount === 3 ? "三位" : "双方"}确认，同词成功！` : `第 ${room.roundNumber} 轮，同词成功！`}</h1>
-              <p className="mt-3 text-sm text-slate-500 sm:text-base">表达可以不同，只要你们想到的是同一个东西。</p>
+            <p className="mt-3 text-sm text-slate-500 sm:text-base">表达可以不同，只要你们想到的是同一个东西。</p>
+            <p className="mt-2 text-sm text-slate-500">{room.playerCount === 3 ? "三位玩家都同意后" : "双方都同意后"}会自动进入新的房间，上一局记录会保留。</p>
             <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
               <button className="secondary-btn export-btn" onClick={preview}><Download size={19}/> 预览记录照片</button>
-              <button className="secondary-btn restart-btn" onClick={restart}>再开一局</button>
+              <button className="primary-btn" onClick={ready} disabled={busy || room.myReady}>
+                {room.myReady ? <Check size={19}/> : <ArrowRight size={19}/>}
+                {room.myReady
+                  ? room.readyCount === room.playerCount ? "正在进入新房间…" : `已同意，等其他人（${room.readyCount}/${room.playerCount}）`
+                  : `再玩一局${room.readyCount > 0 ? `（${room.readyCount}/${room.playerCount}）` : ""}`}
+              </button>
+              <button className="secondary-btn restart-btn" onClick={restart}>结束并返回首页</button>
             </div>
           </div>
         ) : (
