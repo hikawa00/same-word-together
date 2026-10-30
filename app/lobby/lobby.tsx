@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, Clock3, LoaderCircle, Plus, RefreshCw, UsersRound, X } from "lucide-react";
+import { D1_BOOKMARK_HEADER, readD1Bookmark, saveD1Bookmark } from "../d1-bookmark";
+import { PUBLIC_LOBBY_ENABLED } from "../../lib/site-features";
 
 type PublicRoom = {
   code: string;
@@ -12,13 +14,19 @@ type PublicRoom = {
 
 const TOKEN_KEY = "same-word-player";
 
-async function post(payload: Record<string, unknown>) {
+async function post<T>(payload: Record<string, unknown>): Promise<T> {
+  const roomCode = String(payload.code ?? "").trim().toUpperCase();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const bookmark = readD1Bookmark(roomCode || "LOBBY");
+  if (bookmark) headers[D1_BOOKMARK_HEADER] = bookmark;
   const response = await fetch("/api/game", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(payload),
   });
-  const data = await response.json();
+  const data = await response.json() as T & { error?: string };
+  const dataWithRoom = data as typeof data & { code?: string; room?: { rematch?: { code?: string } | null } };
+  saveD1Bookmark(response, ["LOBBY", roomCode, dataWithRoom.code, dataWithRoom.room?.rematch?.code]);
   if (!response.ok) throw new Error(data.error || "操作失败，请重试");
   return data;
 }
@@ -42,10 +50,15 @@ export default function Lobby() {
   const [customDurationSeconds, setCustomDurationSeconds] = useState(90);
 
   const refreshRooms = useCallback(async (): Promise<boolean> => {
+    if (!PUBLIC_LOBBY_ENABLED) return false;
     setRefreshing(true);
     try {
-      const response = await fetch("/api/game?lobby=1", { cache: "no-store" });
-      const data = await response.json();
+      const headers: Record<string, string> = {};
+      const bookmark = readD1Bookmark("LOBBY");
+      if (bookmark) headers[D1_BOOKMARK_HEADER] = bookmark;
+      const response = await fetch("/api/game?lobby=1", { cache: "no-store", headers });
+      const data = await response.json() as { rooms?: PublicRoom[]; error?: string };
+      saveD1Bookmark(response, ["LOBBY"]);
       if (!response.ok) throw new Error(data.error || "大厅暂时无法加载");
       setRooms(data.rooms ?? []);
       setError("");
@@ -60,6 +73,7 @@ export default function Lobby() {
   }, []);
 
   useEffect(() => {
+    if (!PUBLIC_LOBBY_ENABLED) return;
     let timer: number | undefined;
     let stopped = false;
     let task: Promise<void> | null = null;
@@ -106,12 +120,34 @@ export default function Lobby() {
     };
   }, [refreshRooms]);
 
+  if (!PUBLIC_LOBBY_ENABLED) {
+    return (
+      <main className="game-shell min-h-screen px-4 py-5 sm:px-7 sm:py-8">
+        <div className="mx-auto flex min-h-[calc(100vh-40px)] max-w-5xl flex-col">
+          <header className="flex items-center justify-between gap-3">
+            <a href="/" className="flex items-center gap-3 text-inherit no-underline">
+              <div className="logo-mark"><span /><span /></div>
+              <div><div className="text-lg font-black tracking-tight">同词相遇</div><div className="text-xs text-slate-500">SAME WORD</div></div>
+            </a>
+          </header>
+          <section className="flex flex-1 flex-col items-center justify-center py-16 text-center">
+            <div className="waiting-orbit"><UsersRound size={27} /></div>
+            <h1 className="mt-6 text-3xl font-black tracking-tight">随机匹配大厅暂时关闭整改中</h1>
+            <p className="mt-3 max-w-md text-sm leading-6 text-slate-500">我们正在完善公开房间的内容管理。私人房间仍可正常创建和游玩。</p>
+            <a href="/" className="primary-btn mt-6 no-underline"><ArrowLeft size={17} />返回首页</a>
+          </section>
+          <footer className="py-3 text-center text-xs text-slate-400">同词相遇 · 一起联想小游戏</footer>
+        </div>
+      </main>
+    );
+  }
+
   async function joinRoom(room: PublicRoom) {
     setJoiningCode(room.code);
     setError("");
     try {
       const existingToken = localStorage.getItem(`${TOKEN_KEY}:${room.code}`);
-      const data = await post({ action: "joinPublic", code: room.code, token: existingToken });
+      const data = await post<{ code: string; token: string }>({ action: "joinPublic", code: room.code, token: existingToken });
       enterRoom(data.code, data.token);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "加入失败，请重试");
@@ -133,7 +169,7 @@ export default function Lobby() {
     setCreateBusy(true);
     setCreateError("");
     try {
-      const data = await post({ action: "createPublic", durationSeconds, description: cleanDescription });
+      const data = await post<{ code: string; token: string }>({ action: "createPublic", durationSeconds, description: cleanDescription });
       enterRoom(data.code, data.token);
     } catch (cause) {
       setCreateError(cause instanceof Error ? cause.message : "创建失败，请重试");
@@ -203,7 +239,14 @@ export default function Lobby() {
           )}
         </section>
 
-        <footer className="py-3 text-center text-xs text-slate-400">同词相遇 · 一起联想小游戏</footer>
+        <footer className="py-3 text-center text-xs text-slate-400">
+          <div>同词相遇 · 一起联想小游戏</div>
+          <div className="mt-2">
+            <a href="https://afdian.com/a/hikawa00" target="_blank" rel="noreferrer" className="font-semibold text-violet-600 underline underline-offset-4 hover:text-violet-700">
+              喜欢这个小游戏？支持服务器维护
+            </a>
+          </div>
+        </footer>
       </div>
 
       {createOpen && <div className="preview-backdrop" role="presentation" onClick={() => !createBusy && setCreateOpen(false)}>

@@ -1,6 +1,10 @@
-import { and, asc, desc, eq, gt, isNull } from "drizzle-orm";
-import { getDb } from "../../../db";
+import { and, asc, desc, eq, gt, isNull, lt } from "drizzle-orm";
+import { env } from "cloudflare:workers";
+import { createDbSession, type GameDb, type GameDbSession } from "../../../db";
 import { rooms, rounds } from "../../../db/schema";
+import { D1_BOOKMARK_HEADER } from "../../d1-bookmark";
+import { PUBLIC_LOBBY_ENABLED } from "../../../lib/site-features";
+import { isRealtimeEnabledForRoom } from "../../../worker/realtime-config";
 
 function cleanCode(value: unknown) {
   return String(value ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
@@ -28,6 +32,57 @@ function fail(error: string, status = 400) {
   return Response.json({ error }, { status });
 }
 
+function dbJson(session: GameDbSession, body: unknown, status = 200) {
+  const headers = new Headers({ "Cache-Control": "no-store" });
+  const bookmark = session.getBookmark();
+  if (bookmark) headers.set(D1_BOOKMARK_HEADER, bookmark);
+  return Response.json(body, { status, headers });
+}
+
+function dbFail(session: GameDbSession, error: string, status = 400) {
+  return dbJson(session, { error }, status);
+}
+
+function requestBookmark(request: Request) {
+  const bookmark = request.headers.get(D1_BOOKMARK_HEADER);
+  return bookmark && bookmark.length <= 512 ? bookmark : null;
+}
+
+async function notifyRealtimeRoom(code: string) {
+  const namespace = env.GAME_ROOMS;
+  if (!namespace || !isRealtimeEnabledForRoom(code, env)) return;
+  try {
+    const room = namespace.get(namespace.idFromName(code));
+    await room.fetch("https://game-room/notify", { method: "POST" });
+  } catch (error) {
+    // The WebSocket prototype is an enhancement. A notification failure must
+    // never turn a successful D1 game action into a failed request.
+    console.warn({
+      event: "game_room_notification_failed",
+      errorName: error instanceof Error ? error.name : "Error",
+    });
+  }
+}
+
+function errorLogDetails(error: unknown) {
+  const outer = error && typeof error === "object" ? error as Record<string, unknown> : null;
+  const cause = outer?.cause && typeof outer.cause === "object" ? outer.cause as Record<string, unknown> : null;
+  const safeText = (value: unknown) => {
+    if (typeof value !== "string") return undefined;
+    // Drizzle may include bound values after "params:". They can contain player input.
+    return value.replace(/\s*params:\s*[\s\S]*$/i, " params: [redacted]").slice(0, 600);
+  };
+
+  return {
+    errorName: typeof outer?.name === "string" ? outer.name : undefined,
+    errorCode: typeof outer?.code === "string" || typeof outer?.code === "number" ? outer.code : undefined,
+    errorMessage: safeText(outer?.message) ?? (typeof error === "string" ? safeText(error) : undefined),
+    causeName: typeof cause?.name === "string" ? cause.name : undefined,
+    causeCode: typeof cause?.code === "string" || typeof cause?.code === "number" ? cause.code : undefined,
+    causeMessage: safeText(cause?.message),
+  };
+}
+
 function slotFor(room: typeof rooms.$inferSelect, token: string) {
   if (room.playerOneToken === token) return 1;
   if (room.playerTwoToken === token) return 2;
@@ -39,8 +94,7 @@ function tokenForSlot(room: typeof rooms.$inferSelect, slot: number) {
   return [room.playerOneToken, room.playerTwoToken, room.playerThreeToken][slot - 1] ?? null;
 }
 
-async function ensureRematchRoom(room: typeof rooms.$inferSelect) {
-  const db = getDb();
+async function ensureRematchRoom(room: typeof rooms.$inferSelect, db: GameDb) {
   const latestRoom = await db.query.rooms.findFirst({ where: eq(rooms.code, room.code) });
   if (!latestRoom || latestRoom.rematchCode) return;
 
@@ -94,10 +148,14 @@ async function ensureRematchRoom(room: typeof rooms.$inferSelect) {
   throw new Error("无法确认下一局房间，请重试。");
 }
 
-async function stateFor(code: string, token: string) {
-  const db = getDb();
-  let room = await db.query.rooms.findFirst({ where: eq(rooms.code, code) });
-  if (!room) return { error: "房间不存在，检查一下房间码吧。", status: 404 } as const;
+async function stateFor(db: GameDb, code: string, token: string, options: {
+  compact?: boolean;
+  knownRound?: number;
+  includeHistory?: boolean;
+} = {}) {
+  const foundRoom = await db.query.rooms.findFirst({ where: eq(rooms.code, code) });
+  if (!foundRoom) return { error: "房间不存在，检查一下房间码吧。", status: 404 } as const;
+  let room: typeof rooms.$inferSelect = foundRoom;
   const slot = slotFor(room, token);
   if (!slot) return { error: "房间已满，或当前设备尚未加入。", status: 403 } as const;
 
@@ -108,8 +166,25 @@ async function stateFor(code: string, token: string) {
       .where(and(eq(rooms.code, code), eq(rooms.playerOneToken, token), eq(rooms.isPublic, true), eq(rooms.status, "waiting"), isNull(rooms.playerTwoToken)));
   }
 
-  const allRounds = await db.select().from(rounds).where(eq(rounds.roomCode, code)).orderBy(asc(rounds.number));
-  const current = allRounds.find((round) => round.number === room.currentRound) ?? null;
+  const includeHistory = !options.compact || options.includeHistory === true ||
+    (options.knownRound !== undefined && options.knownRound !== room.currentRound);
+  let current: typeof rounds.$inferSelect | null;
+  let historyRounds: (typeof rounds.$inferSelect)[] = [];
+  if (options.compact) {
+    current = (await db.query.rounds.findFirst({
+      where: and(eq(rounds.roomCode, code), eq(rounds.number, room.currentRound)),
+    })) ?? null;
+    if (includeHistory) {
+      historyRounds = await db.select().from(rounds).where(and(
+        eq(rounds.roomCode, code),
+        lt(rounds.number, room.currentRound),
+      )).orderBy(asc(rounds.number));
+    }
+  } else {
+    const allRounds = await db.select().from(rounds).where(eq(rounds.roomCode, code)).orderBy(asc(rounds.number));
+    current = allRounds.find((round) => round.number === room.currentRound) ?? null;
+    historyRounds = allRounds.filter((round) => round.number < room.currentRound);
+  }
   const deadline = current && room.durationSeconds > 0
     ? new Date(current.startedAt).getTime() + room.durationSeconds * 1000
     : null;
@@ -122,7 +197,7 @@ async function stateFor(code: string, token: string) {
   const manualMatch = Boolean(revealed && matchFlags.length === room.playerCount && matchFlags.every(Boolean));
   const matched = exactMatch || manualMatch;
   if (matched && readyFlags.length === room.playerCount && readyFlags.every(Boolean) && !room.rematchCode) {
-    await ensureRematchRoom(room);
+    await ensureRematchRoom(room, db);
     room = (await db.query.rooms.findFirst({ where: eq(rooms.code, code) })) ?? room;
   }
   const nextRoom = room.rematchCode
@@ -135,7 +210,6 @@ async function stateFor(code: string, token: string) {
   const otherSubmittedCount = words.filter(Boolean).length - Number(Boolean(myWord));
   const otherReadyCount = readyFlags.filter(Boolean).length - Number(Boolean(readyFlags[slot - 1]));
   const otherMatchVoteCount = matchFlags.filter(Boolean).length - Number(Boolean(matchFlags[slot - 1]));
-
   return {
     room: {
       code,
@@ -166,20 +240,25 @@ async function stateFor(code: string, token: string) {
       matchVoteCount: matchFlags.filter(Boolean).length,
       matchReason: matched ? (exactMatch ? "exact" : "manual") : null,
       words: revealed ? words.map((word) => word || "（未提交）") : null,
-      history: allRounds.filter((round) => round.number < room.currentRound).map((round) => ({
+      ...(includeHistory ? { history: historyRounds.map((round) => ({
         number: round.number,
-        words: [round.playerOneWord, round.playerTwoWord, round.playerThreeWord].slice(0, room.playerCount).map((word) => word || "（未提交）"),
-      })),
+        words: [round.playerOneWord, round.playerTwoWord, round.playerThreeWord]
+          .slice(0, room.playerCount)
+          .map((word) => word || "（未提交）"),
+      })) } : {}),
     },
   } as const;
 }
-
 export async function GET(request: Request) {
+  let session: GameDbSession | null = null;
   try {
     const url = new URL(request.url);
     if (url.searchParams.get("lobby") === "1") {
+      if (!PUBLIC_LOBBY_ENABLED) return fail("随机匹配大厅正在维护，私人房间仍可正常使用。", 503);
+      // Lobby listings tolerate brief replica lag and are a read-only hot path.
+      session = createDbSession(requestBookmark(request), "first-unconstrained");
       const freshAfter = new Date(Date.now() - 90_000).toISOString();
-      const publicRooms = await getDb().select({
+      const publicRooms = await session.db.select({
         code: rooms.code,
         durationSeconds: rooms.durationSeconds,
         description: rooms.description,
@@ -190,25 +269,37 @@ export async function GET(request: Request) {
         isNull(rooms.playerTwoToken),
         gt(rooms.lastSeenAt, freshAfter),
       )).orderBy(desc(rooms.lastSeenAt)).limit(50);
-      return Response.json({ rooms: publicRooms }, { headers: { "Cache-Control": "no-store" } });
+      return dbJson(session, { rooms: publicRooms });
     }
     const code = cleanCode(url.searchParams.get("code"));
     const token = String(url.searchParams.get("token") ?? "");
     if (!code || !token) return fail("缺少房间信息。", 400);
-    const result = await stateFor(code, token);
-    if ("error" in result) return fail(result.error, result.status);
-    return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+    session = createDbSession(requestBookmark(request));
+    const knownRoundParam = url.searchParams.get("knownRound");
+    const knownRoundValue = knownRoundParam === null ? Number.NaN : Number(knownRoundParam);
+    const result = await stateFor(session.db, code, token, {
+      compact: url.searchParams.get("compact") === "1",
+      knownRound: Number.isInteger(knownRoundValue) ? knownRoundValue : undefined,
+      includeHistory: url.searchParams.get("history") === "1",
+    });
+    if ("error" in result && typeof result.error === "string") return dbFail(session, result.error, result.status ?? 400);
+    return dbJson(session, result);
   } catch (error) {
-    console.error(error);
-    return fail("服务暂时开小差了，请稍后再试。", 500);
+    console.error({ event: "api_request_failed", route: "GET /api/game", ...errorLogDetails(error) });
+    return session ? dbFail(session, "服务暂时开小差了，请稍后再试。", 500) : fail("服务暂时开小差了，请稍后再试。", 500);
   }
 }
 
 export async function POST(request: Request) {
+  let session: GameDbSession | null = null;
   try {
     const body = (await request.json()) as Record<string, unknown>;
     const action = String(body.action ?? "");
-    const db = getDb();
+    if (!PUBLIC_LOBBY_ENABLED && (action === "createPublic" || action === "joinPublic")) {
+      return fail("随机匹配大厅正在维护，私人房间仍可正常使用。", 503);
+    }
+    session = createDbSession(requestBookmark(request));
+    const db = session.db;
 
     if (action === "create" || action === "createPublic") {
       const requestedDuration = Number(body.durationSeconds ?? 60);
@@ -226,7 +317,7 @@ export async function POST(request: Request) {
         const code = randomCode();
         try {
           await db.insert(rooms).values({ code, playerOneToken: token, durationSeconds: requestedDuration, playerCount, isPublic, description, lastSeenAt: isPublic ? now : null, createdAt: now, updatedAt: now });
-          return Response.json({ code, token }, { status: 201 });
+          return dbJson(session, { code, token }, 201);
         } catch (error) {
           if (attempt === 7) throw error;
         }
@@ -236,21 +327,24 @@ export async function POST(request: Request) {
     const code = cleanCode(body.code);
     if (!code) return fail("请输入 6 位房间码。", 400);
     const room = await db.query.rooms.findFirst({ where: eq(rooms.code, code) });
-    if (!room) return fail("没有找到这个房间。", 404);
+    if (!room) return dbFail(session, "没有找到这个房间。", 404);
+    if (!PUBLIC_LOBBY_ENABLED && room.isPublic && action === "join") {
+      return dbFail(session, "随机匹配大厅正在维护，暂时不能加入公开房间。", 503);
+    }
 
     if (action === "join" || action === "joinPublic") {
       const isPublicJoin = action === "joinPublic";
       const existingToken = String(body.token ?? "");
       if (isPublicJoin && existingToken && slotFor(room, existingToken)) {
-        return Response.json({ code, token: existingToken });
+        return dbJson(session, { code, token: existingToken });
       }
       const freshAfter = new Date(Date.now() - 90_000).toISOString();
       if (isPublicJoin && (!room.isPublic || room.status !== "waiting" || room.playerTwoToken || !room.lastSeenAt || room.lastSeenAt <= freshAfter)) {
-        return fail("这个房间刚刚关闭或已有人加入，请选另一个房间。", 409);
+        return dbFail(session, "这个房间刚刚关闭或已有人加入，请选另一个房间。", 409);
       }
-      if (room.status !== "waiting") return fail("房间已经开始或满员啦。", 409);
+      if (room.status !== "waiting") return dbFail(session, "房间已经开始或满员啦。", 409);
       const joinedPlayerCount = [room.playerOneToken, room.playerTwoToken, room.playerThreeToken].slice(0, room.playerCount).filter(Boolean).length;
-      if (joinedPlayerCount >= room.playerCount) return fail("房间已经满员啦。", 409);
+      if (joinedPlayerCount >= room.playerCount) return dbFail(session, "房间已经满员啦。", 409);
       const token = crypto.randomUUID();
       const now = new Date().toISOString();
       const joiningThirdPlayer = Boolean(room.playerTwoToken && room.playerCount === 3 && !room.playerThreeToken);
@@ -273,10 +367,11 @@ export async function POST(request: Request) {
             isNull(rooms.playerTwoToken),
             ...(isPublicJoin ? [eq(rooms.isPublic, true), gt(rooms.lastSeenAt, freshAfter)] : []),
           )).returning();
-      if (!updated.length) return fail("刚刚有人抢先加入了这个房间。", 409);
+      if (!updated.length) return dbFail(session, "刚刚有人抢先加入了这个房间。", 409);
       const gameStarts = room.playerCount === 2 || joiningThirdPlayer;
       if (gameStarts) await db.insert(rounds).values({ roomCode: code, number: 1, startedAt: now }).onConflictDoNothing();
-      return Response.json({ code, token });
+      await notifyRealtimeRoom(code);
+      return dbJson(session, { code, token });
     }
 
     const token = String(body.token ?? "");
@@ -288,6 +383,9 @@ export async function POST(request: Request) {
     if (!current) return fail("还在等另一位玩家加入。", 409);
 
     if (action === "submit") {
+      if (!PUBLIC_LOBBY_ENABLED && room.isPublic) {
+        return dbFail(session, "公开房间正在整改，暂时不能提交新词。私人房间仍可正常游玩。", 503);
+      }
       const word = cleanWord(body.word);
       if (!word) return fail("先写下一个词语吧。", 400);
       const deadline = room.durationSeconds > 0 ? new Date(current.startedAt).getTime() + room.durationSeconds * 1000 : null;
@@ -342,11 +440,16 @@ export async function POST(request: Request) {
       return fail("未知操作。", 400);
     }
 
-    const result = await stateFor(code, token);
-    if ("error" in result) return fail(result.error, result.status);
-    return Response.json(result);
+    const knownRoundValue = Number(body.knownRound);
+    const result = await stateFor(db, code, token, {
+      compact: body.compact === true,
+      knownRound: Number.isInteger(knownRoundValue) ? knownRoundValue : undefined,
+    });
+    if ("error" in result && typeof result.error === "string") return dbFail(session, result.error, result.status ?? 400);
+    await notifyRealtimeRoom(code);
+    return dbJson(session, result);
   } catch (error) {
-    console.error(error);
-    return fail("服务暂时开小差了，请稍后再试。", 500);
+    console.error({ event: "api_request_failed", route: "POST /api/game", ...errorLogDetails(error) });
+    return session ? dbFail(session, "服务暂时开小差了，请稍后再试。", 500) : fail("服务暂时开小差了，请稍后再试。", 500);
   }
 }

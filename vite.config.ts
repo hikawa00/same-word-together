@@ -70,6 +70,15 @@ export default defineConfig(async ({ command }) => {
           ...localBindingConfig,
           ...(command === "serve"
             ? {
+                durable_objects: {
+                  bindings: [{ name: "GAME_ROOMS", class_name: "GameRoom" }],
+                },
+                migrations: [{ tag: "game-room-prototype-v1", new_sqlite_classes: ["GameRoom"] }],
+                vars: { GAME_REALTIME_MODE: "on" },
+              }
+            : {}),
+          ...(command === "serve"
+            ? {
                 services: [
                   {
                     binding: "CONNECTORS",

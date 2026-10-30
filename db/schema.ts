@@ -1,4 +1,4 @@
-import { integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const rooms = sqliteTable("rooms", {
   code: text("code").primaryKey(),
@@ -15,7 +15,9 @@ export const rooms = sqliteTable("rooms", {
   lastSeenAt: text("last_seen_at"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
-});
+}, (table) => [
+  index("rooms_lobby_waiting_seen_idx").on(table.isPublic, table.status, table.playerTwoToken, table.lastSeenAt),
+]);
 
 export const rounds = sqliteTable(
   "rounds",
